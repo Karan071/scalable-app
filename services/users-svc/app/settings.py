@@ -12,3 +12,10 @@ class Settings(BaseServiceSettings):
 
     oidc_issuer: str
     oidc_jwks_uri: str
+
+    # Keycloak Admin REST API access for setting the `sf_uid` user attribute
+    # (LLD-01 §11.2) — a dedicated client-credentials client, never the
+    # realm admin.
+    keycloak_admin_base_url: str
+    keycloak_admin_client_id: str = "sf-users-admin"
+    keycloak_admin_client_secret: str

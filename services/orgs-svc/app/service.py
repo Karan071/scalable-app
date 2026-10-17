@@ -1,0 +1,473 @@
+"""orgs-svc business logic (LLD-03 §4-6).
+
+Two guards LLD-03 specifies are open items here because they depend on
+authz-svc's local Casbin enforcer, which doesn't exist yet (E2.7):
+- checking the inviter actually holds `role_grant:<role>` for each
+  requested role (§6.1) — authz-svc's own `membership.created` consumer
+  already re-checks this independently before granting, so skipping it
+  here is a UX gap (an invite can request a role the inviter can't grant),
+  not a security one;
+- the last-active-org_admin guard on disable/revoke/leave (§5) — orgs-svc
+  has no visibility into who holds which role at all (that's authz-svc's
+  `role_assignments` table, by design: "orgs-svc owns *who is a member*;
+  authz-svc owns *what members may do*", LLD-03 §1).
+"""
+
+import hashlib
+import secrets
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
+from sf_common import TokenCipher
+from sf_messaging import add_to_outbox, build_envelope
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from . import repository
+from .models import Organization
+from .slugs import normalize_slug
+
+_NOTIFY_CHANNEL = "outbox_orgs"
+
+_ORG_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "suspend": ("pending", "active"),
+    "reactivate": ("suspended",),
+    "archive": ("active", "suspended"),
+}
+
+
+class InvalidTransition(Exception):
+    pass
+
+
+class VersionConflictError(Exception):
+    pass
+
+
+class NotFoundError(Exception):
+    pass
+
+
+class InvitationInvalid(Exception):
+    """Covers unknown, wrong-status, and expired tokens — one response, by design (§6.2)."""
+
+
+class InvitationEmailMismatch(Exception):
+    pass
+
+
+def _hash_token(token: str) -> bytes:
+    return hashlib.sha256(token.encode()).digest()
+
+
+async def _emit(
+    session: AsyncSession,
+    *,
+    event_type: str,
+    routing_key: str,
+    aggregate_type: str,
+    aggregate_id: UUID,
+    aggregate_version: int,
+    data: dict[str, object],
+) -> None:
+    envelope = build_envelope(
+        event_type=event_type,
+        source="orgs-svc",
+        subject=str(aggregate_id),
+        data=data,
+        schema_version="1.0",
+        aggregate_type=aggregate_type,
+        aggregate_version=aggregate_version,
+    )
+    await add_to_outbox(
+        session,
+        envelope,
+        exchange="sf.events",
+        routing_key=routing_key,
+        aggregate_id=str(aggregate_id),
+        notify_channel=_NOTIFY_CHANNEL,
+    )
+
+
+async def _emit_org_event(
+    session: AsyncSession, org: Organization, event_type: str, routing_key: str
+) -> None:
+    await _emit(
+        session,
+        event_type=event_type,
+        routing_key=routing_key,
+        aggregate_type="organization",
+        aggregate_id=org.id,
+        aggregate_version=org.version,
+        data={"org_id": str(org.id), "slug": org.slug, "status": org.status},
+    )
+
+
+# --- organizations -----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CreatedOrganization:
+    organization: Organization
+    owner_invitation: "CreatedInvitation"
+
+
+async def create_organization(
+    session: AsyncSession,
+    *,
+    slug: str,
+    name: str,
+    currency: str,
+    shipping_flat_minor: int,
+    tax_rate_bps: int,
+    created_by: UUID,
+    owner_email: str,
+    ttl_days: int,
+    cipher: TokenCipher,
+) -> CreatedOrganization:
+    """Creates a ``pending`` org plus its owner invitation (LLD-03 §4): the
+    org has no members at all until that invitation is accepted, which is
+    what moves it to ``active`` (see ``accept_invitation``)."""
+    normalized_slug = normalize_slug(slug)
+    org = await repository.insert_organization(
+        session,
+        slug=normalized_slug,
+        name=name,
+        currency=currency,
+        shipping_flat_minor=shipping_flat_minor,
+        tax_rate_bps=tax_rate_bps,
+        created_by=created_by,
+    )
+    await _emit_org_event(session, org, "organization.created", "organization.created.v1")
+
+    owner_invitation = await create_invitation(
+        session,
+        org_id=org.id,
+        email=owner_email,
+        roles_requested=["org_admin"],
+        invited_by=created_by,
+        ttl_days=ttl_days,
+        cipher=cipher,
+    )
+    return CreatedOrganization(organization=org, owner_invitation=owner_invitation)
+
+
+async def update_organization_settings(
+    session: AsyncSession,
+    org_id: UUID,
+    *,
+    expected_version: int,
+    name: str | None = None,
+    shipping_flat_minor: int | None = None,
+    tax_rate_bps: int | None = None,
+    settings: dict[str, object] | None = None,
+) -> Organization:
+    try:
+        org = await repository.update_organization_settings(
+            session,
+            org_id,
+            expected_version=expected_version,
+            name=name,
+            shipping_flat_minor=shipping_flat_minor,
+            tax_rate_bps=tax_rate_bps,
+            settings=settings,
+        )
+    except repository.VersionConflict as exc:
+        raise VersionConflictError(org_id) from exc
+    await _emit_org_event(session, org, "organization.updated", "organization.updated.v1")
+    return org
+
+
+async def transition_organization(
+    session: AsyncSession, org_id: UUID, *, action: str, reason: str | None
+) -> Organization:
+    """``action`` is one of ``suspend``/``reactivate``/``archive`` (LLD-03 §4)."""
+    org = await repository.get_organization(session, org_id)
+    if org is None:
+        raise NotFoundError(org_id)
+    if org.status not in _ORG_TRANSITIONS[action]:
+        raise InvalidTransition(f"cannot {action} an org in status {org.status!r}")
+
+    new_status = {"suspend": "suspended", "reactivate": "active", "archive": "archived"}[action]
+    updated = await repository.update_organization_status(
+        session, org_id, new_status=new_status, reason=reason
+    )
+    if updated is None:
+        raise NotFoundError(org_id)
+    await _emit_org_event(
+        session, updated, f"organization.{new_status}", f"organization.{new_status}.v1"
+    )
+    return updated
+
+
+# --- invitations ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CreatedInvitation:
+    invitation_id: UUID
+    raw_token: str
+    expires_at: datetime
+
+
+async def create_invitation(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    email: str,
+    roles_requested: list[str],
+    invited_by: UUID,
+    ttl_days: int,
+    cipher: TokenCipher,
+) -> CreatedInvitation:
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(UTC) + timedelta(days=ttl_days)
+    invitation = await repository.insert_invitation(
+        session,
+        org_id=org_id,
+        email=email,
+        token_hash=_hash_token(raw_token),
+        roles_requested=roles_requested,
+        expires_at=expires_at,
+        invited_by=invited_by,
+    )
+    token_enc = cipher.encrypt(raw_token, aad=str(invitation.id).encode())
+    await _emit(
+        session,
+        event_type="invitation.created",
+        routing_key="invitation.created.v1",
+        aggregate_type="invitation",
+        aggregate_id=invitation.id,
+        aggregate_version=invitation.version,
+        data={
+            "invitation_id": str(invitation.id),
+            "org_id": str(org_id),
+            "email": email,
+            "expires_at": expires_at.isoformat(),
+            "token_enc": token_enc,
+        },
+    )
+    return CreatedInvitation(
+        invitation_id=invitation.id, raw_token=raw_token, expires_at=expires_at
+    )
+
+
+async def resend_invitation(
+    session: AsyncSession, invitation_id: UUID, *, org_id: UUID, ttl_days: int, cipher: TokenCipher
+) -> CreatedInvitation:
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(UTC) + timedelta(days=ttl_days)
+    invitation = await repository.resend_invitation(
+        session,
+        invitation_id,
+        org_id=org_id,
+        new_token_hash=_hash_token(raw_token),
+        new_expires_at=expires_at,
+    )
+    if invitation is None:
+        raise NotFoundError(invitation_id)
+
+    token_enc = cipher.encrypt(raw_token, aad=str(invitation.id).encode())
+    await _emit(
+        session,
+        event_type="invitation.created",
+        routing_key="invitation.created.v1",
+        aggregate_type="invitation",
+        aggregate_id=invitation.id,
+        aggregate_version=invitation.version,
+        data={
+            "invitation_id": str(invitation.id),
+            "org_id": str(org_id),
+            "email": invitation.email,
+            "expires_at": expires_at.isoformat(),
+            "token_enc": token_enc,
+        },
+    )
+    return CreatedInvitation(
+        invitation_id=invitation.id, raw_token=raw_token, expires_at=expires_at
+    )
+
+
+async def revoke_invitation(session: AsyncSession, invitation_id: UUID, *, org_id: UUID) -> None:
+    invitation = await repository.update_invitation_status(
+        session, invitation_id, org_id=org_id, new_status="revoked"
+    )
+    if invitation is None:
+        raise NotFoundError(invitation_id)
+    await _emit(
+        session,
+        event_type="invitation.revoked",
+        routing_key="invitation.revoked.v1",
+        aggregate_type="invitation",
+        aggregate_id=invitation.id,
+        aggregate_version=invitation.version,
+        data={"invitation_id": str(invitation.id), "org_id": str(org_id)},
+    )
+
+
+@dataclass(frozen=True)
+class AcceptedInvitation:
+    org_id: UUID
+    membership_id: UUID
+
+
+async def accept_invitation(
+    session: AsyncSession,
+    *,
+    token: str,
+    user_id: UUID,
+    user_email: str,
+    user_email_verified: bool,
+) -> AcceptedInvitation:
+    invitation = await repository.get_invitation_by_token_hash(session, _hash_token(token))
+    if invitation is None or invitation.status != "pending":
+        raise InvitationInvalid()
+    if invitation.expires_at <= datetime.now(UTC):
+        await repository.update_invitation_status(
+            session, invitation.id, org_id=invitation.org_id, new_status="expired"
+        )
+        await _emit(
+            session,
+            event_type="invitation.expired",
+            routing_key="invitation.expired.v1",
+            aggregate_type="invitation",
+            aggregate_id=invitation.id,
+            aggregate_version=invitation.version,
+            data={"invitation_id": str(invitation.id), "org_id": str(invitation.org_id)},
+        )
+        raise InvitationInvalid()
+
+    if not user_email_verified or user_email.casefold() != invitation.email.casefold():
+        raise InvitationEmailMismatch()
+
+    membership = await repository.upsert_active_membership(
+        session, org_id=invitation.org_id, user_id=user_id, invited_by=invitation.invited_by
+    )
+    await repository.mark_invitation_accepted(session, invitation.id, accepted_by=user_id)
+
+    org = await repository.get_organization(session, invitation.org_id)
+    if org is not None and org.status == "pending":
+        # The org has no members until its owner invitation is accepted
+        # (LLD-03 §4): that's exactly this transition.
+        activated = await repository.update_organization_status(
+            session, org.id, new_status="active", reason=None
+        )
+        if activated is not None:
+            await _emit_org_event(
+                session, activated, "organization.updated", "organization.updated.v1"
+            )
+
+    await _emit(
+        session,
+        event_type="membership.created",
+        routing_key="membership.created.v1",
+        aggregate_type="membership",
+        aggregate_id=membership.id,
+        aggregate_version=membership.version,
+        data={
+            "membership_id": str(membership.id),
+            "org_id": str(invitation.org_id),
+            "user_id": str(user_id),
+            "roles_requested": invitation.roles_requested,
+            "invited_by": str(invitation.invited_by),
+        },
+    )
+    await _emit(
+        session,
+        event_type="invitation.accepted",
+        routing_key="invitation.accepted.v1",
+        aggregate_type="invitation",
+        aggregate_id=invitation.id,
+        aggregate_version=invitation.version,
+        data={"invitation_id": str(invitation.id), "org_id": str(invitation.org_id)},
+    )
+    return AcceptedInvitation(org_id=invitation.org_id, membership_id=membership.id)
+
+
+# --- memberships -----------------------------------------------------------
+
+
+async def _transition_membership(
+    session: AsyncSession,
+    membership_id: UUID,
+    *,
+    org_id: UUID,
+    new_status: str,
+    from_statuses: tuple[str, ...],
+    reason: str | None,
+    event_type: str,
+    routing_key: str,
+    actor_id: UUID,
+) -> None:
+    membership = await repository.update_membership_status(
+        session,
+        membership_id,
+        org_id=org_id,
+        new_status=new_status,
+        from_statuses=from_statuses,
+        reason=reason,
+    )
+    if membership is None:
+        raise NotFoundError(membership_id)
+    await _emit(
+        session,
+        event_type=event_type,
+        routing_key=routing_key,
+        aggregate_type="membership",
+        aggregate_id=membership.id,
+        aggregate_version=membership.version,
+        data={
+            "membership_id": str(membership.id),
+            "org_id": str(org_id),
+            "user_id": str(membership.user_id),
+            "actor_id": str(actor_id),
+        },
+    )
+
+
+async def disable_membership(
+    session: AsyncSession, membership_id: UUID, *, org_id: UUID, actor_id: UUID, reason: str | None
+) -> None:
+    await _transition_membership(
+        session,
+        membership_id,
+        org_id=org_id,
+        new_status="disabled",
+        from_statuses=("active",),
+        reason=reason,
+        event_type="membership.disabled",
+        routing_key="membership.disabled.v1",
+        actor_id=actor_id,
+    )
+
+
+async def reactivate_membership(
+    session: AsyncSession, membership_id: UUID, *, org_id: UUID, actor_id: UUID
+) -> None:
+    await _transition_membership(
+        session,
+        membership_id,
+        org_id=org_id,
+        new_status="active",
+        from_statuses=("disabled",),
+        reason=None,
+        event_type="membership.reactivated",
+        routing_key="membership.reactivated.v1",
+        actor_id=actor_id,
+    )
+
+
+async def revoke_membership(
+    session: AsyncSession, membership_id: UUID, *, org_id: UUID, actor_id: UUID, reason: str | None
+) -> None:
+    await _transition_membership(
+        session,
+        membership_id,
+        org_id=org_id,
+        new_status="revoked",
+        from_statuses=("active", "disabled"),
+        reason=reason,
+        event_type="membership.revoked",
+        routing_key="membership.revoked.v1",
+        actor_id=actor_id,
+    )

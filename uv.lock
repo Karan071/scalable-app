@@ -1070,6 +1070,15 @@ wheels = [
 ]
 
 [[package]]
+name = "redis"
+version = "8.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a8/99/604f0b666d4c616d891cf77ebb9db6bb21601344c051aebf1b72b9ff915f/redis-8.1.0.tar.gz", hash = "sha256:6e1a19beef9225c83efd689c7e6b7da2d5215b1f42cd13b7fc3714d0a09c7b25", size = 5254356, upload-time = "2026-07-30T08:51:00.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/66/9d/c5731f6e3608663d4d3656fd8d3aecee8b509c3082818f5a13eae925baea/redis-8.1.0-py3-none-any.whl", hash = "sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb", size = 560618, upload-time = "2026-07-30T08:50:58.497Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.17.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1159,6 +1168,9 @@ version = "0.1.0"
 source = { editable = "services/bff" }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
+    { name = "redis" },
+    { name = "sf-authz" },
     { name = "sf-common" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1166,6 +1178,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "redis", specifier = ">=5.0" },
+    { name = "sf-authz", editable = "libs/py/sf-authz" },
     { name = "sf-common", editable = "libs/py/sf-common" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
@@ -1277,15 +1292,25 @@ name = "scaleforge-orgs-svc"
 version = "0.1.0"
 source = { editable = "services/orgs-svc" }
 dependencies = [
+    { name = "alembic" },
     { name = "fastapi" },
+    { name = "httpx" },
+    { name = "sf-authz" },
     { name = "sf-common" },
+    { name = "sf-db" },
+    { name = "sf-messaging" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.13" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sf-authz", editable = "libs/py/sf-authz" },
     { name = "sf-common", editable = "libs/py/sf-common" },
+    { name = "sf-db", editable = "libs/py/sf-db" },
+    { name = "sf-messaging", editable = "libs/py/sf-messaging" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
@@ -1330,6 +1355,7 @@ source = { editable = "services/users-svc" }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "sf-authz" },
     { name = "sf-common" },
     { name = "sf-db" },
@@ -1341,6 +1367,7 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "sf-authz", editable = "libs/py/sf-authz" },
     { name = "sf-common", editable = "libs/py/sf-common" },
     { name = "sf-db", editable = "libs/py/sf-db" },
@@ -1368,6 +1395,7 @@ name = "sf-common"
 version = "0.1.0"
 source = { editable = "libs/py/sf-common" }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic" },
@@ -1376,6 +1404,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=43.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.9" },

@@ -99,11 +99,11 @@ Expect 11 schemas (`users`, `orgs`, `authz`, `catalog`, `search`, `cart`,
 | Database | `scaleforge` |
 
 Use the schema dropdown in the left sidebar to switch between the 11
-schemas. `users` has tables now (`users`, `reserved_handles`, `outbox`,
-`alembic_version` — run its migration first: `cd services/users-svc &&
-SF_DB_PASSWORD=app_local_dev uv run alembic upgrade head`); the rest are
-still empty, no migrations yet. Switch **Database** to `keycloak` (same
-server, same login) to see Keycloak's own tables, which do have data.
+schemas. `users` and `orgs` have tables now (run each service's migration
+first: `cd services/<svc> && SF_DB_PASSWORD=app_local_dev uv run alembic
+upgrade head`); the rest are still empty, no migrations yet. Switch
+**Database** to `keycloak` (same server, same login) to see Keycloak's own
+tables, which do have data.
 
 To see only one service's own schema (matching what that service's DB role
 can actually see), log in as `svc_users` / `.env`'s `POSTGRES_APP_PASSWORD`

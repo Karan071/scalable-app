@@ -35,3 +35,16 @@ JSON instead of inside it (confirmed against a running Keycloak 26.0,
   verification in the Keycloak admin console first.
 - WebAuthn (open item, Product) and `private_key_jwt` for staging (open item,
   Security) are deferred per LLD-01 §17.
+- **`e2e-test-user`** and `sf-bff`'s extra `http://localhost:8020/*` redirect
+  URI/origin are test fixtures for driving the real login flow headlessly
+  (LLD-01 §16), not part of the production realm design. Real users are
+  always JIT-provisioned on first login (LLD-01 §11.2) — this is the one
+  seeded exception, needed because nothing can log in through a UI here.
+- **`components` declares `sf_uid` in the realm's User Profile.** Keycloak
+  26's declarative User Profile silently drops any attribute write for a
+  name it doesn't recognize — `users-svc`'s admin-API call to set `sf_uid`
+  (LLD-01 §11.2) returned `204 No Content` and simply didn't persist it,
+  with no error anywhere, until this was added (confirmed against a running
+  Keycloak 26.0.8, 2026-10-18). `sf_uid` is `view`/`edit` scoped to `admin`
+  only — never exposed to the user via account console or self-service
+  profile APIs.

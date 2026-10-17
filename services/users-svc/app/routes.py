@@ -1,16 +1,19 @@
 """users-svc HTTP routes (LLD-01 §11.3)."""
 
+import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sf_authz import AuthenticatedUser, Internal, Principal
+from sf_db import transaction
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import repository, service
 from .db import get_session
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Named so tests can target them with `app.dependency_overrides[...]`
 # (FastAPI keys overrides by the exact callable passed to `Depends`).
@@ -44,16 +47,36 @@ class ProvisionResponse(BaseModel):
 @router.post("/internal/v1/users:provision", response_model=ProvisionResponse)
 async def provision(
     body: ProvisionRequest,
-    session: AsyncSession = Depends(get_session),
+    request: Request,
     _: Principal = Depends(require_provision_scope),
 ) -> ProvisionResponse:
-    result = await service.provision_user(
-        session,
-        idp_issuer=body.idp_issuer,
-        idp_subject=body.idp_subject,
-        email=body.email,
-        email_verified=body.email_verified,
-    )
+    # Not `Depends(get_session)`: the Keycloak admin sync below is a network
+    # call that must run *after* this transaction commits (LLD-09 §3), but
+    # also *before* the response is returned — the BFF refreshes the token
+    # for `sf_uid` as soon as it sees `needs_claim_refresh`, so a
+    # fire-and-forget background task would race it.
+    async with transaction(request.app.state.session_factory) as session:
+        result = await service.provision_user(
+            session,
+            idp_issuer=body.idp_issuer,
+            idp_subject=body.idp_subject,
+            email=body.email,
+            email_verified=body.email_verified,
+        )
+
+    if result.needs_claim_refresh:
+        try:
+            await request.app.state.keycloak_admin.set_sf_uid(
+                keycloak_user_id=body.idp_subject, sf_uid=str(result.user_id)
+            )
+        except Exception:
+            # LLD-01 §11.2 plans an async retry via the outbox command
+            # `user.idp_sync_requested` for this failure path; that command
+            # handler doesn't exist yet (open item), so this just logs.
+            logger.exception(
+                "failed to sync sf_uid to Keycloak", extra={"sf_uid": str(result.user_id)}
+            )
+
     return ProvisionResponse(
         user_id=result.user_id, status=result.status, needs_claim_refresh=result.needs_claim_refresh
     )

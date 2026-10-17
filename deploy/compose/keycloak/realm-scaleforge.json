@@ -8,13 +8,11 @@
   "resetPasswordAllowed": true,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
-
   "accessTokenLifespan": 300,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 36000,
   "revokeRefreshToken": true,
   "refreshTokenMaxReuse": 0,
-
   "bruteForceProtected": true,
   "permanentLockout": false,
   "failureFactor": 5,
@@ -23,11 +21,11 @@
   "maxDeltaTimeSeconds": 43200,
   "quickLoginCheckMilliSeconds": 1000,
   "minimumQuickLoginWaitSeconds": 60,
-
   "passwordPolicy": "length(12) and notUsername and notEmail",
-
   "eventsEnabled": true,
-  "eventsListeners": ["jboss-logging"],
+  "eventsListeners": [
+    "jboss-logging"
+  ],
   "enabledEventTypes": [
     "LOGIN",
     "LOGIN_ERROR",
@@ -40,24 +38,24 @@
   ],
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": false,
-
   "defaultSignatureAlgorithm": "RS256",
-
-  "groups": [{ "name": "mfa-required" }],
-
+  "groups": [
+    {
+      "name": "mfa-required"
+    }
+  ],
   "clientScopes": [
     {
       "name": "users:provision",
       "protocol": "openid-connect",
-      "description": "users-svc POST /internal/v1/users:provision (LLD-01 §11.3)"
+      "description": "users-svc POST /internal/v1/users:provision (LLD-01 \u00a711.3)"
     },
     {
       "name": "users:read",
       "protocol": "openid-connect",
-      "description": "users-svc GET /internal/v1/users:batch (LLD-01 §11.3)"
+      "description": "users-svc GET /internal/v1/users:batch (LLD-01 \u00a711.3)"
     }
   ],
-
   "clients": [
     {
       "clientId": "sf-bff",
@@ -70,11 +68,17 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["https://app.scaleforge.localhost/auth/callback"],
-      "webOrigins": ["https://app.scaleforge.localhost"],
+      "redirectUris": [
+        "https://app.scaleforge.localhost/auth/callback",
+        "http://localhost:8020/auth/callback"
+      ],
+      "webOrigins": [
+        "https://app.scaleforge.localhost",
+        "http://localhost:8020"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://app.scaleforge.localhost/",
+        "post.logout.redirect.uris": "https://app.scaleforge.localhost/##http://localhost:8020/",
         "backchannel.logout.url": "https://bff.sf-app.svc/auth/backchannel-logout",
         "backchannel.logout.session.required": "true",
         "backchannel.logout.revoke.offline.tokens": "true"
@@ -115,7 +119,10 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
-      "defaultClientScopes": ["users:provision", "users:read"],
+      "defaultClientScopes": [
+        "users:provision",
+        "users:read"
+      ],
       "protocolMappers": [
         {
           "name": "scaleforge-internal-audience",
@@ -185,14 +192,16 @@
       "serviceAccountsEnabled": true
     }
   ],
-
   "users": [
     {
       "username": "service-account-sf-users-admin",
       "enabled": true,
       "serviceAccountClientId": "sf-users-admin",
       "clientRoles": {
-        "realm-management": ["view-users", "manage-users"]
+        "realm-management": [
+          "view-users",
+          "manage-users"
+        ]
       }
     },
     {
@@ -200,8 +209,40 @@
       "enabled": true,
       "serviceAccountClientId": "sf-authz-admin",
       "clientRoles": {
-        "realm-management": ["view-users", "manage-users"]
+        "realm-management": [
+          "view-users",
+          "manage-users"
+        ]
       }
+    },
+    {
+      "username": "e2e-test-user",
+      "email": "e2e-test-user@scaleforge.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "E2E",
+      "lastName": "Test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "$(E2E_TEST_USER_PASSWORD)",
+          "temporary": false
+        }
+      ]
     }
-  ]
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "name": "declarative-user-profile",
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\": [{\"name\": \"username\", \"validations\": {\"length\": {\"min\": 3, \"max\": 255}, \"username-prohibited-characters\": {}, \"up-username-not-idn-homograph\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"email\", \"validations\": {\"email\": {}, \"length\": {\"max\": 255}}, \"required\": {\"roles\": [\"user\"]}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"firstName\", \"validations\": {\"length\": {\"max\": 255}, \"person-name-prohibited-characters\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"lastName\", \"validations\": {\"length\": {\"max\": 255}, \"person-name-prohibited-characters\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"sf_uid\", \"displayName\": \"Internal user ID (ADR-0009)\", \"permissions\": {\"view\": [\"admin\"], \"edit\": [\"admin\"]}, \"multivalued\": false}], \"groups\": [{\"name\": \"user-metadata\", \"displayHeader\": \"User metadata\", \"displayDescription\": \"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ]
+  }
 }

@@ -6,6 +6,7 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "alembic>=1.13",
+  "httpx>=0.27",
   "sf-common",
   "sf-db",
   "sf-authz",

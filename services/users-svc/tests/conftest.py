@@ -12,3 +12,5 @@ os.environ.setdefault("SF_OIDC_ISSUER", "https://kc.test/realms/scaleforge")
 os.environ.setdefault(
     "SF_OIDC_JWKS_URI", "https://kc.test/realms/scaleforge/protocol/openid-connect/certs"
 )
+os.environ.setdefault("SF_KEYCLOAK_ADMIN_BASE_URL", "https://kc.test/admin/realms/scaleforge")
+os.environ.setdefault("SF_KEYCLOAK_ADMIN_CLIENT_SECRET", "test-admin-secret")
