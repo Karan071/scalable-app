@@ -1,0 +1,151 @@
+"""users-svc HTTP routes (LLD-01 §11.3)."""
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sf_authz import AuthenticatedUser, Internal, Principal
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from . import repository, service
+from .db import get_session
+
+router = APIRouter()
+
+# Named so tests can target them with `app.dependency_overrides[...]`
+# (FastAPI keys overrides by the exact callable passed to `Depends`).
+require_provision_scope = Internal("users:provision")
+require_read_scope = Internal("users:read")
+require_authenticated_user = AuthenticatedUser()
+
+
+def _sf_uid(principal: Principal) -> UUID:
+    raw = principal.claim("sf_uid")
+    if raw is None:
+        raise HTTPException(
+            status_code=403, detail="token has no sf_uid claim yet; refresh required"
+        )
+    return UUID(str(raw))
+
+
+class ProvisionRequest(BaseModel):
+    idp_issuer: str
+    idp_subject: str
+    email: str
+    email_verified: bool
+
+
+class ProvisionResponse(BaseModel):
+    user_id: UUID
+    status: str
+    needs_claim_refresh: bool
+
+
+@router.post("/internal/v1/users:provision", response_model=ProvisionResponse)
+async def provision(
+    body: ProvisionRequest,
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_provision_scope),
+) -> ProvisionResponse:
+    result = await service.provision_user(
+        session,
+        idp_issuer=body.idp_issuer,
+        idp_subject=body.idp_subject,
+        email=body.email,
+        email_verified=body.email_verified,
+    )
+    return ProvisionResponse(
+        user_id=result.user_id, status=result.status, needs_claim_refresh=result.needs_claim_refresh
+    )
+
+
+class MeResponse(BaseModel):
+    id: UUID
+    handle: str | None
+    display_name: str | None
+    email: str
+    status: str
+    version: int
+
+
+@router.get("/v1/me", response_model=MeResponse)
+async def get_me(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_authenticated_user),
+) -> MeResponse:
+    user = await service.get_self(session, _sf_uid(principal))
+    if user is None:
+        raise HTTPException(status_code=404)
+    return MeResponse(
+        id=user.id,
+        handle=user.handle,
+        display_name=user.display_name,
+        email=user.email,
+        status=user.status,
+        version=user.version,
+    )
+
+
+class UpdateMeRequest(BaseModel):
+    display_name: str | None = None
+    handle: str | None = None
+
+
+@router.patch("/v1/me", response_model=MeResponse)
+async def patch_me(
+    body: UpdateMeRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_authenticated_user),
+) -> MeResponse:
+    try:
+        user = await service.update_self(
+            session, _sf_uid(principal), display_name=body.display_name, handle=body.handle
+        )
+    except service.HandleUnavailable as exc:
+        raise HTTPException(status_code=409, detail="handle unavailable") from exc
+    except service.UserNotFoundOrAlreadyInState as exc:
+        raise HTTPException(status_code=404) from exc
+    except repository.VersionConflict as exc:
+        raise HTTPException(status_code=409, detail="concurrent update, retry") from exc
+    return MeResponse(
+        id=user.id,
+        handle=user.handle,
+        display_name=user.display_name,
+        email=user.email,
+        status=user.status,
+        version=user.version,
+    )
+
+
+class HandleAvailability(BaseModel):
+    available: bool
+
+
+@router.get("/v1/me/handle-availability", response_model=HandleAvailability)
+async def handle_availability(
+    handle: str = Query(..., min_length=1, max_length=30),
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_authenticated_user),
+) -> HandleAvailability:
+    available = await service.check_handle_availability(session, handle)
+    return HandleAvailability(available=available)
+
+
+class BatchUser(BaseModel):
+    id: UUID
+    status: str
+    display_name: str | None
+    handle: str | None
+
+
+@router.get("/internal/v1/users:batch", response_model=list[BatchUser])
+async def batch(
+    ids: list[UUID] = Query(...),
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_read_scope),
+) -> list[BatchUser]:
+    users = await service.get_batch(session, ids)
+    return [
+        BatchUser(id=u.id, status=u.status, display_name=u.display_name, handle=u.handle)
+        for u in users
+    ]

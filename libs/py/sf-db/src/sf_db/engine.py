@@ -1,1 +1,44 @@
-"""Placeholder for engine functionality."""
+"""Async engine construction (ADR-0006, LLD-09 §2).
+
+One engine per connection pool. Services create a separate engine for request
+handling and one for each background worker (relay, sweepers), so a backlog
+in one cannot starve the other (the "bulkhead" row in LLD-09 §2).
+"""
+
+from sqlalchemy import URL
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+
+def build_engine(
+    *,
+    host: str,
+    port: int,
+    database: str,
+    user: str,
+    password: str,
+    pool_size: int = 10,
+    max_overflow: int = 5,
+    pool_timeout: float = 2.0,
+    pool_recycle: int = 1800,
+) -> AsyncEngine:
+    """Build an asyncpg engine with the M2 pool defaults (LLD-09 §2).
+
+    ``pool_timeout`` fails fast on exhaustion rather than queuing requests
+    indefinitely; callers turn the resulting ``TimeoutError`` into a 503.
+    """
+    url = URL.create(
+        "postgresql+asyncpg",
+        username=user,
+        password=password,
+        host=host,
+        port=port,
+        database=database,
+    )
+    return create_async_engine(
+        url,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout,
+        pool_pre_ping=True,
+        pool_recycle=pool_recycle,
+    )

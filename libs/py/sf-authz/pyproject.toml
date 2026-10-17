@@ -1,9 +1,12 @@
 [project]
 name = "sf-authz"
 version = "0.1.0"
-description = "JWT validation, Casbin enforcer, policy watcher, and route-coverage guard. Implemented with E2.7."
+description = "JWT validation, Casbin enforcer, policy watcher, and route-coverage guard. Token validation and Internal()/AuthenticatedUser()/Public() land with E2.5 (needed by users-svc); the Casbin enforcer, watcher, and route-coverage guard are E2.7."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "pyjwt[crypto]>=2.9",
+  "fastapi>=0.115",
+]
 
 [build-system]
 requires = ["hatchling"]

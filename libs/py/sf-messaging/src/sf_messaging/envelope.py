@@ -1,1 +1,47 @@
-"""Placeholder for envelope functionality."""
+"""CloudEvents-shaped event envelope (LLD-08 §3)."""
+
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID, uuid7
+
+
+def build_envelope(
+    *,
+    event_type: str,
+    source: str,
+    subject: str,
+    data: dict[str, Any],
+    schema_version: str,
+    aggregate_type: str,
+    aggregate_version: int,
+    org_id: str | None = None,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
+    traceparent: str | None = None,
+) -> dict[str, Any]:
+    """Build one envelope. ``id`` doubles as the outbox row id and AMQP ``message_id``."""
+    event_id = uuid7()
+    occurred_at = datetime.now(UTC)
+    return {
+        "specversion": "1.0",
+        "id": str(event_id),
+        "type": event_type,
+        "source": source,
+        "subject": subject,
+        "time": occurred_at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "datacontenttype": "application/json",
+        "dataschema": f"https://schemas.scaleforge.dev/events/{event_type}/v1.json",
+        "sfschemaversion": schema_version,
+        "sfaggregatetype": aggregate_type,
+        "sfaggregateversion": aggregate_version,
+        "sforgid": org_id,
+        "sfcorrelationid": correlation_id,
+        "sfcausationid": causation_id,
+        "traceparent": traceparent,
+        "tracestate": "",
+        "data": data,
+    }
+
+
+def envelope_id(envelope: dict[str, Any]) -> UUID:
+    return UUID(envelope["id"])

@@ -45,6 +45,19 @@
 
   "groups": [{ "name": "mfa-required" }],
 
+  "clientScopes": [
+    {
+      "name": "users:provision",
+      "protocol": "openid-connect",
+      "description": "users-svc POST /internal/v1/users:provision (LLD-01 §11.3)"
+    },
+    {
+      "name": "users:read",
+      "protocol": "openid-connect",
+      "description": "users-svc GET /internal/v1/users:batch (LLD-01 §11.3)"
+    }
+  ],
+
   "clients": [
     {
       "clientId": "sf-bff",
@@ -52,7 +65,7 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${SF_BFF_CLIENT_SECRET}",
+      "secret": "$(SF_BFF_CLIENT_SECRET)",
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -98,10 +111,11 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${SF_SVC_BFF_CLIENT_SECRET}",
+      "secret": "$(SF_SVC_BFF_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
+      "defaultClientScopes": ["users:provision", "users:read"],
       "protocolMappers": [
         {
           "name": "scaleforge-internal-audience",
@@ -121,7 +135,7 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${SF_SVC_USERS_CLIENT_SECRET}",
+      "secret": "$(SF_SVC_USERS_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true
@@ -132,7 +146,7 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${SF_SVC_ORGS_CLIENT_SECRET}",
+      "secret": "$(SF_SVC_ORGS_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true
@@ -143,7 +157,7 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${SF_SVC_AUTHZ_CLIENT_SECRET}",
+      "secret": "$(SF_SVC_AUTHZ_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true
@@ -154,13 +168,10 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${SF_USERS_ADMIN_CLIENT_SECRET}",
+      "secret": "$(SF_USERS_ADMIN_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": true,
-      "serviceAccountClientRoles": {
-        "realm-management": ["view-users", "manage-users"]
-      }
+      "serviceAccountsEnabled": true
     },
     {
       "clientId": "sf-authz-admin",
@@ -168,15 +179,29 @@
       "protocol": "openid-connect",
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "${SF_AUTHZ_ADMIN_CLIENT_SECRET}",
+      "secret": "$(SF_AUTHZ_ADMIN_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": true,
-      "serviceAccountClientRoles": {
-        "realm-management": ["view-users", "manage-users"]
-      }
+      "serviceAccountsEnabled": true
     }
   ],
 
-  "comment": "Realm-as-code for M2 start (LLD-01 §3, E2.3), applied by keycloak-config-cli (deploy/compose/compose.yaml), not --import-realm, so client secrets stay out of this file as `${VAR}` placeholders resolved from .env. `serviceAccountClientRoles` grants the realm-management roles Keycloak ships; the LLD's narrower 'manage group membership for mfa-required only' scope needs Keycloak's fine-grained admin permissions feature, which is not configured here yet (open item). The conditional-OTP/step-up authentication flow (LLD-01 §3.3, §9) is NOT in this file: a hand-written Keycloak authentication-flow export is easy to get subtly wrong and this sandbox has no Docker daemon to test an import against, so it is deferred to the first session with a running Keycloak. WebAuthn (open item, Product) and private_key_jwt for staging (open item, Security) are deferred per LLD-01 §17."
+  "users": [
+    {
+      "username": "service-account-sf-users-admin",
+      "enabled": true,
+      "serviceAccountClientId": "sf-users-admin",
+      "clientRoles": {
+        "realm-management": ["view-users", "manage-users"]
+      }
+    },
+    {
+      "username": "service-account-sf-authz-admin",
+      "enabled": true,
+      "serviceAccountClientId": "sf-authz-admin",
+      "clientRoles": {
+        "realm-management": ["view-users", "manage-users"]
+      }
+    }
+  ]
 }

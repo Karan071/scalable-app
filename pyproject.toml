@@ -26,5 +26,25 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's DI idiom: Depends(...)/Query(...)/etc. in a default are meant to be called there.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Path",
+  "fastapi.Body",
+  "fastapi.Header",
+  "fastapi.Cookie",
+  "sf_authz.Internal",
+  "sf_authz.AuthenticatedUser",
+  "sf_authz.Public",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.mypy]
+# Needed once a Settings subclass has required fields with no default
+# (pydantic-settings fills them from the environment at runtime, but mypy
+# can't see that without this plugin): confirmed on users-svc's Settings.
+plugins = ["pydantic.mypy"]

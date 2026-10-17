@@ -1,9 +1,11 @@
 [project]
 name = "sf-messaging"
 version = "0.1.0"
-description = "Envelope, outbox writer, relay, and inbox-based consumer base. Implemented with E2.8."
+description = "Envelope, outbox writer, relay, and inbox-based consumer base. Envelope + outbox writer land with E2.5 (needed by users-svc); the relay and inbox consumer base are E2.8."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "sqlalchemy[asyncio]>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -84,10 +84,12 @@ services:
   keycloak-config-cli:
     # Applies deploy/compose/keycloak/realm-scaleforge.json via the Admin
     # REST API (LLD-01 §3) so client secrets stay in .env, substituted into
-    # the realm file's ${VAR} placeholders at apply time, never on disk.
-    # TODO: pin an exact release matching Keycloak 26.0 once verified; this
-    # sandbox has no network/Docker access to confirm one.
-    image: adorsys/keycloak-config-cli:latest
+    # the realm file's $(VAR) placeholders at apply time, never on disk (see
+    # deploy/compose/keycloak/README.md for why it's $(VAR) and not ${VAR}).
+    # Pinned to the build published for Keycloak 26.0.x: `latest` resolved to
+    # a 26.5-targeted build against our pinned 26.0.8 server and failed with
+    # an opaque 400 on realm creation (confirmed 2026-10-18).
+    image: adorsys/keycloak-config-cli:6.5.1-26.0.5
     depends_on:
       keycloak:
         condition: service_healthy

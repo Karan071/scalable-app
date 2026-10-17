@@ -3,7 +3,10 @@ name = "sf-db"
 version = "0.1.0"
 description = "Async engine/session factory, pool metrics, keyset pagination, deadlock retry. Implemented with E2.5/E2.6."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "sqlalchemy[asyncio]>=2.0",
+  "asyncpg>=0.30",
+]
 
 [build-system]
 requires = ["hatchling"]
