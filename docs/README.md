@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — M1 (Requirements/Architecture) |
+| Status | Accepted v1.0 — M1 closed; M2 (Identity and multi-tenancy) in progress |
 | Source | [PRD.md](../PRD.md) v1.0 (Draft for review) |
 | Last updated | 2026-10-17 |
-| Scope | Planning and design only. No implementation exists yet. |
+| Scope | M1 design is accepted. M2 implementation is starting; see [delivery plan](00-delivery-plan.md). |
 
 This folder turns the PRD into a reviewable architecture. The work runs in three layers:
 

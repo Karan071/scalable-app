@@ -1,6 +1,6 @@
 # ADR-0002: Tenancy model
 
-- **Status:** Proposed (needs product-owner confirmation: OQ-1)
+- **Status:** Accepted (2026-10-17 — OQ-1 confirmed using the default in this decision)
 - **Date:** 2026-10-17
 
 ## Context

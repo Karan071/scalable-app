@@ -1,1 +1,1 @@
-"""Shared asynchronous database setup, sessions, pagination, and transient transaction retry helpers."""
+"""Shared async DB engine/session setup, pagination, and transient transaction retry helpers."""

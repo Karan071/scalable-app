@@ -1,6 +1,6 @@
 # ADR-0007: Search backend — PostgreSQL full-text first
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context

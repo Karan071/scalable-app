@@ -1,6 +1,6 @@
 # ADR-0005: Authorization topology — embedded enforcer, centralized administration
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context

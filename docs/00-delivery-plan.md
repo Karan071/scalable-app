@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 |
+| Status | Accepted v1.0 — M1 closed, M2 in progress |
 | Applies to | PRD v1.0, milestones M1–M6 |
 | Last updated | 2026-10-17 |
 
@@ -67,6 +67,8 @@ Epics are planning units, not tickets. Each epic cites the design section that g
 | E1.7 | Answer the product owner's open questions (§5) | — |
 
 **Exit evidence:** this doc set reviewed. ADR statuses recorded. OQ-1..OQ-4 answered, because they change data models.
+
+**M1 closed 2026-10-17.** HLD and ADR-0001..0016 reviewed; all 16 are `Accepted` (ADR-0013 provisional until M6; ADR-0014 accepted with OQ-7's default). OQ-1..OQ-4 confirmed using the defaults recorded in §5. OQ-5, OQ-6, OQ-8, OQ-9 stay open and are resolved at the milestones they affect (§5). M2 can start.
 
 ### M2 — Identity and multi-tenancy
 
@@ -248,17 +250,17 @@ Each topic maps to a problem, where it is demonstrated, and how it is tested. "E
 
 ## 5. Open questions for the product owner
 
-| ID | Question | Default used in this design | Impacts |
-| --- | --- | --- | --- |
-| OQ-1 | What is a tenant? | An **organization is a merchant store**. Catalog, inventory, orders, and staff are org-scoped. Customers are platform-level accounts (ADR-0002). | All data models |
-| OQ-2 | Guest checkout? | No. Cart and checkout require login in v1. | Cart, BFF sessions |
-| OQ-3 | Cart across multiple stores? | No. One cart per (customer, store); one order per store. | Cart, checkout |
-| OQ-4 | Tax/shipping? | Flat per-store shipping fee and tax rate fields. No external calculation. | Pricing |
-| OQ-5 | Self-registration? | Enabled in Keycloak with email verification. | Keycloak, users |
-| OQ-6 | Capture timing? | Authorize at checkout, capture on order confirmation. | Payments |
-| OQ-7 | Staging environment target? | Local kind + ephemeral CI kind. Managed cluster optional (ADR-0014). | M5 |
-| OQ-8 | Add a `platform_operator` role (DLQ replay, reconciliation, flags) below `super_user`? | Yes (LLD-02 §4). | Authz, ops console |
-| OQ-9 | Data retention for audit and orders? | Audit 400 days hot; orders indefinite (synthetic data). | Partitioning, DR |
+| ID | Question | Default used in this design | Impacts | Status |
+| --- | --- | --- | --- | --- |
+| OQ-1 | What is a tenant? | An **organization is a merchant store**. Catalog, inventory, orders, and staff are org-scoped. Customers are platform-level accounts (ADR-0002). | All data models | **Confirmed** 2026-10-17 |
+| OQ-2 | Guest checkout? | No. Cart and checkout require login in v1. | Cart, BFF sessions | **Confirmed** 2026-10-17 |
+| OQ-3 | Cart across multiple stores? | No. One cart per (customer, store); one order per store. | Cart, checkout | **Confirmed** 2026-10-17 |
+| OQ-4 | Tax/shipping? | Flat per-store shipping fee and tax rate fields. No external calculation. | Pricing | **Confirmed** 2026-10-17 |
+| OQ-5 | Self-registration? | Enabled in Keycloak with email verification. | Keycloak, users | **Confirmed** 2026-10-17 |
+| OQ-6 | Capture timing? | Authorize at checkout, capture on order confirmation. | Payments | Open — resolve before M3 |
+| OQ-7 | Staging environment target? | Local kind + ephemeral CI kind. Managed cluster optional (ADR-0014). | M5 | **Confirmed** 2026-10-17 (ADR-0014 accepted) |
+| OQ-8 | Add a `platform_operator` role (DLQ replay, reconciliation, flags) below `super_user`? | Yes (LLD-02 §4). | Authz, ops console | Open — resolve before E2.7 |
+| OQ-9 | Data retention for audit and orders? | Audit 400 days hot; orders indefinite (synthetic data). | Partitioning, DR | Open — resolve before M3 |
 
 ## 6. LLD review checklist
 

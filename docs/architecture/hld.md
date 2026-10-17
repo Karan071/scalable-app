@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 — for M1 review |
+| Status | Accepted v1.0 — M1 review closed 2026-10-17 |
 | PRD | v1.0 |
 | Last updated | 2026-10-17 |
 | Related | [Delivery plan](../00-delivery-plan.md) · [ADRs](../adr/README.md) · LLDs in [lld/](lld/) |
@@ -543,21 +543,21 @@ flowchart TB
 | ADR | Decision | Status |
 | --- | --- | --- |
 | [0001](../adr/0001-record-architecture-decisions.md) | Record decisions as ADRs | Accepted |
-| [0002](../adr/0002-tenancy-model.md) | Organization = merchant store; customers are platform accounts | Proposed (OQ-1) |
-| [0003](../adr/0003-message-broker-rabbitmq.md) | RabbitMQ (quorum queues) + transactional outbox | Proposed |
-| [0004](../adr/0004-casbin-policy-storage.md) | Casbin policies in PostgreSQL; Redis watcher + version polling | Proposed |
-| [0005](../adr/0005-authorization-topology.md) | Embedded enforcer library; centralized policy administration | Proposed |
-| [0006](../adr/0006-database-topology.md) | One PostgreSQL cluster, schema + role per service | Proposed |
-| [0007](../adr/0007-search-backend.md) | PostgreSQL FTS first; OpenSearch only on measured need | Proposed |
-| [0008](../adr/0008-payment-provider.md) | Mock provider; authorize/capture; HMAC webhooks | Proposed |
-| [0009](../adr/0009-service-identity-and-token-propagation.md) | Forward user JWT; client credentials for service work | Proposed |
-| [0010](../adr/0010-redis-topology.md) | Separate redis-session (Sentinel, AOF) and redis-cache | Proposed |
-| [0011](../adr/0011-checkout-saga-orchestration.md) | Orchestrated checkout saga in orders-svc | Proposed |
-| [0012](../adr/0012-edge-gateway.md) | Gateway API with Envoy Gateway | Proposed |
-| [0013](../adr/0013-telemetry-backends.md) | Prometheus + Tempo + Loki + Grafana | Proposed |
-| [0014](../adr/0014-kubernetes-environments.md) | kind (local/CI); staging target TBD | Proposed |
-| [0015](../adr/0015-api-conventions.md) | REST/JSON conventions | Proposed |
-| [0016](../adr/0016-deployable-units-and-repo.md) | Monorepo; deployable units; M2 co-deploy option | Proposed |
+| [0002](../adr/0002-tenancy-model.md) | Organization = merchant store; customers are platform accounts | Accepted (OQ-1 confirmed) |
+| [0003](../adr/0003-message-broker-rabbitmq.md) | RabbitMQ (quorum queues) + transactional outbox | Accepted |
+| [0004](../adr/0004-casbin-policy-storage.md) | Casbin policies in PostgreSQL; Redis watcher + version polling | Accepted |
+| [0005](../adr/0005-authorization-topology.md) | Embedded enforcer library; centralized policy administration | Accepted |
+| [0006](../adr/0006-database-topology.md) | One PostgreSQL cluster, schema + role per service | Accepted |
+| [0007](../adr/0007-search-backend.md) | PostgreSQL FTS first; OpenSearch only on measured need | Accepted |
+| [0008](../adr/0008-payment-provider.md) | Mock provider; authorize/capture; HMAC webhooks | Accepted |
+| [0009](../adr/0009-service-identity-and-token-propagation.md) | Forward user JWT; client credentials for service work | Accepted |
+| [0010](../adr/0010-redis-topology.md) | Separate redis-session (Sentinel, AOF) and redis-cache | Accepted |
+| [0011](../adr/0011-checkout-saga-orchestration.md) | Orchestrated checkout saga in orders-svc | Accepted |
+| [0012](../adr/0012-edge-gateway.md) | Gateway API with Envoy Gateway | Accepted |
+| [0013](../adr/0013-telemetry-backends.md) | Prometheus + Tempo + Loki + Grafana | Accepted (provisional until M6) |
+| [0014](../adr/0014-kubernetes-environments.md) | kind (local/CI); staging on kind on a dedicated VM (OQ-7 confirmed) | Accepted |
+| [0015](../adr/0015-api-conventions.md) | REST/JSON conventions | Accepted |
+| [0016](../adr/0016-deployable-units-and-repo.md) | Monorepo; deployable units; M2 co-deploy option | Accepted |
 
 ## 15. Architecture risks (in addition to PRD §13.2)
 

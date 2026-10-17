@@ -1,1 +1,9 @@
 PRD.md
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Local Compose secrets (see .env.example)
+.env

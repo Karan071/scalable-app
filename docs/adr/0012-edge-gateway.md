@@ -1,6 +1,6 @@
 # ADR-0012: Edge — Kubernetes Gateway API with Envoy Gateway
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context

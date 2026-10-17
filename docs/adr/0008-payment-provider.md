@@ -1,6 +1,6 @@
 # ADR-0008: Payment provider interface — mock PSP with authorize/capture and signed webhooks
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context

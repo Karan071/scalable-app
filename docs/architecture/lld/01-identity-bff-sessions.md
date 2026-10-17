@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 |
+| Status | Accepted (2026-10-17) |
 | Milestone | M2 |
 | Services | bff, users-svc, Keycloak |
 | ADRs | 0009, 0010, 0015 |

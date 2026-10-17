@@ -1,6 +1,6 @@
 # ScaleForge
 
-**ScaleForge is a design-stage, full-stack, multi-tenant commerce platform.** Its purpose is to show how a working storefront can be designed to remain secure, observable, and reliable as it grows into a distributed system. The repository currently contains the product requirements and architecture documents; application code has not been implemented yet.
+**ScaleForge is a design-stage, full-stack, multi-tenant commerce platform.** Its purpose is to show how a working storefront can be designed to remain secure, observable, and reliable as it grows into a distributed system. The repository contains the product requirements and architecture documents, and a workspace scaffold (M2 start); domain logic has not been implemented yet.
 
 ## Product at a glance
 
@@ -61,6 +61,17 @@ These are **planned choices**, recorded in draft ADRs and designs, not a descrip
 
 The plan progresses from requirements and architecture (M1), to identity and tenancy (M2), commerce (M3), performance and distributed workflows (M4), Kubernetes deployment (M5), then observability, reliability, and recovery evidence (M6). Designs are reviewed before the milestone that implements them. Architecture docs use `Draft`, `In review`, `Accepted`, and `Superseded` status; verify each document's status before treating a proposal as settled.
 
+## Getting started
+
+```sh
+cp .env.example .env
+make sync   # install the uv workspace (services/*, libs/py/*)
+make dev    # bring up Postgres, Redis, Keycloak, RabbitMQ, Mailpit, Jaeger
+make test   # run the Python test suite
+```
+
+Every service exposes `/livez` and `/readyz` from the shared `sf-common` template (LLD-12 §1, §7), but none has domain logic yet.
+
 ## Current status
 
-This repository is currently a **planning and design artifact**. There is no application scaffold or runnable local setup yet. The architecture contains assumptions and open product questions, and its ADRs/LLDs are drafts; consult their status fields and the delivery plan before implementation.
+M1 (requirements and architecture) is closed: the HLD and ADR-0001..0016 are reviewed and accepted, and OQ-1..OQ-4 are confirmed (see the [delivery plan](docs/00-delivery-plan.md)). M2 (identity and multi-tenancy) is starting: the uv workspace, shared service template, and local Compose infrastructure exist (E2.1, E2.2). The login path, tenant/authz model, outbox, and React shell are not built yet. Remaining LLDs stay drafts; consult their status fields before treating a design as settled.

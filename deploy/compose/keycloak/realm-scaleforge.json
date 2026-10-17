@@ -1,0 +1,182 @@
+{
+  "realm": "scaleforge",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": false,
+  "verifyEmail": true,
+  "resetPasswordAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "quickLoginCheckMilliSeconds": 1000,
+  "minimumQuickLoginWaitSeconds": 60,
+
+  "passwordPolicy": "length(12) and notUsername and notEmail",
+
+  "eventsEnabled": true,
+  "eventsListeners": ["jboss-logging"],
+  "enabledEventTypes": [
+    "LOGIN",
+    "LOGIN_ERROR",
+    "LOGOUT",
+    "REGISTER",
+    "UPDATE_TOTP",
+    "REMOVE_TOTP",
+    "UPDATE_PASSWORD",
+    "REVOKE_GRANT"
+  ],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
+
+  "defaultSignatureAlgorithm": "RS256",
+
+  "groups": [{ "name": "mfa-required" }],
+
+  "clients": [
+    {
+      "clientId": "sf-bff",
+      "name": "ScaleForge BFF (browser-facing)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${SF_BFF_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["https://app.scaleforge.localhost/auth/callback"],
+      "webOrigins": ["https://app.scaleforge.localhost"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://app.scaleforge.localhost/",
+        "backchannel.logout.url": "https://bff.sf-app.svc/auth/backchannel-logout",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "scaleforge-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "scaleforge-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "sf_uid",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "sf_uid",
+            "claim.name": "sf_uid",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "sf-svc-bff",
+      "name": "ScaleForge BFF (service identity)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${SF_SVC_BFF_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "scaleforge-internal-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "scaleforge-internal",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "sf-svc-users",
+      "name": "users-svc (service identity)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${SF_SVC_USERS_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "sf-svc-orgs",
+      "name": "orgs-svc (service identity)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${SF_SVC_ORGS_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "sf-svc-authz",
+      "name": "authz-svc (service identity)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${SF_SVC_AUTHZ_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "sf-users-admin",
+      "name": "users-svc Keycloak admin access",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${SF_USERS_ADMIN_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "serviceAccountClientRoles": {
+        "realm-management": ["view-users", "manage-users"]
+      }
+    },
+    {
+      "clientId": "sf-authz-admin",
+      "name": "authz-svc Keycloak admin access (mfa-required group sync)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${SF_AUTHZ_ADMIN_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "serviceAccountClientRoles": {
+        "realm-management": ["view-users", "manage-users"]
+      }
+    }
+  ],
+
+  "comment": "Realm-as-code for M2 start (LLD-01 §3, E2.3), applied by keycloak-config-cli (deploy/compose/compose.yaml), not --import-realm, so client secrets stay out of this file as `${VAR}` placeholders resolved from .env. `serviceAccountClientRoles` grants the realm-management roles Keycloak ships; the LLD's narrower 'manage group membership for mfa-required only' scope needs Keycloak's fine-grained admin permissions feature, which is not configured here yet (open item). The conditional-OTP/step-up authentication flow (LLD-01 §3.3, §9) is NOT in this file: a hand-written Keycloak authentication-flow export is easy to get subtly wrong and this sandbox has no Docker daemon to test an import against, so it is deferred to the first session with a running Keycloak. WebAuthn (open item, Product) and private_key_jwt for staging (open item, Security) are deferred per LLD-01 §17."
+}

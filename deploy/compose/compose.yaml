@@ -1,0 +1,178 @@
+# Local development dependencies (LLD-12 §3, E2.2). This is the `core`
+# profile only: the infrastructure M2 needs before any service code runs.
+# The `app` profile (bff + domain services) is added once there is business
+# logic worth containerizing.
+#
+# Run from the repo root: `make dev` (see root Makefile), or directly:
+#   docker compose -f deploy/compose/compose.yaml --env-file .env up -d
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_DB: scaleforge
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-schemas.sh:/docker-entrypoint-initdb.d/10-init-schemas.sh:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d scaleforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  adminer:
+    # Dev-only DB browser (not in LLD-12 §3; added for local convenience).
+    # Log in as `postgres` / POSTGRES_SUPERUSER_PASSWORD to see every schema,
+    # or as a `svc_<name>` role / POSTGRES_APP_PASSWORD to see just its own.
+    image: adminer:4
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-session:
+    # Sessions (ADR-0010): AOF persistence, no eviction. Sentinel is a
+    # Kubernetes-only concern (LLD-12 §4); local Compose runs one instance.
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-session-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis-cache:
+    # Cache/rate-limit/pub-sub (ADR-0010): no persistence, rebuildable.
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--health-enabled=true"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    ports:
+      - "8081:8080" # app port; avoids clashing with a local port 8080
+      - "9000:9000" # management/health port
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n' >&3 && grep -q '200' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  keycloak-config-cli:
+    # Applies deploy/compose/keycloak/realm-scaleforge.json via the Admin
+    # REST API (LLD-01 §3) so client secrets stay in .env, substituted into
+    # the realm file's ${VAR} placeholders at apply time, never on disk.
+    # TODO: pin an exact release matching Keycloak 26.0 once verified; this
+    # sandbox has no network/Docker access to confirm one.
+    image: adorsys/keycloak-config-cli:latest
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_USER: admin
+      KEYCLOAK_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_AVAILABILITYCHECK_ENABLED: "true"
+      KEYCLOAK_AVAILABILITYCHECK_TIMEOUT: "120s"
+      IMPORT_FILES_LOCATIONS: /config/realm-scaleforge.json
+      IMPORT_VARSUBSTITUTION_ENABLED: "true"
+      SF_BFF_CLIENT_SECRET: ${SF_BFF_CLIENT_SECRET}
+      SF_SVC_BFF_CLIENT_SECRET: ${SF_SVC_BFF_CLIENT_SECRET}
+      SF_SVC_USERS_CLIENT_SECRET: ${SF_SVC_USERS_CLIENT_SECRET}
+      SF_SVC_ORGS_CLIENT_SECRET: ${SF_SVC_ORGS_CLIENT_SECRET}
+      SF_SVC_AUTHZ_CLIENT_SECRET: ${SF_SVC_AUTHZ_CLIENT_SECRET}
+      SF_USERS_ADMIN_CLIENT_SECRET: ${SF_USERS_ADMIN_CLIENT_SECRET}
+      SF_AUTHZ_ADMIN_CLIENT_SECRET: ${SF_AUTHZ_ADMIN_CLIENT_SECRET}
+    volumes:
+      - ./keycloak/realm-scaleforge.json:/config/realm-scaleforge.json:ro
+    restart: "no"
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq-topology:
+    # Declares the scaleforge.events topic exchange (ADR-0003, LLD-08) via
+    # the management HTTP API, against the real broker credentials, instead
+    # of a mounted definitions.json — that approach silently disables
+    # RabbitMQ's own RABBITMQ_DEFAULT_USER seeding (see git history / commit
+    # message for the incident this replaced).
+    image: curlimages/curl:8.11.0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        curl -sf -u "$$RABBITMQ_DEFAULT_USER:$$RABBITMQ_DEFAULT_PASS" \
+          -X PUT http://rabbitmq:15672/api/exchanges/%2F/scaleforge.events \
+          -H 'content-type: application/json' \
+          -d '{"type":"topic","durable":true}'
+    restart: "no"
+
+  mailpit:
+    # TODO: pin an exact release once verified against Docker Hub; `latest`
+    # is used because this sandbox has no network/Docker access to confirm
+    # one (see docs/architecture/lld/12-platform-deployment.md §2).
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025" # web UI
+      - "1025:1025" # SMTP
+    # No healthcheck: the image is a minimal static binary (no shell/wget
+    # confirmed), and nothing else in this stack depends on mailpit's health.
+
+  jaeger:
+    # Temporary trace viewer (delivery plan M2 §3, E2.2). Replaced by the
+    # full Collector + Tempo stack in E6.1.
+    # TODO: pin an exact release once verified; see the mailpit note above.
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    # No healthcheck: same reasoning as mailpit above.
+
+volumes:
+  pgdata:
+  redis-session-data:
+  rabbitmq-data:

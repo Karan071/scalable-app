@@ -1,6 +1,6 @@
 # ADR-0010: Redis topology — separate session and cache instances
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context

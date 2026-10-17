@@ -1,6 +1,6 @@
 # ADR-0003: Message broker — RabbitMQ with transactional outbox
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context

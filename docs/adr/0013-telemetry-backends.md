@@ -1,6 +1,6 @@
 # ADR-0013: Telemetry backends — Prometheus, Tempo, Loki, Grafana
 
-- **Status:** Proposed (provisional until M6)
+- **Status:** Accepted (provisional until M6)
 - **Date:** 2026-10-17
 
 ## Context

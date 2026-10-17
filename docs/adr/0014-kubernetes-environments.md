@@ -1,6 +1,6 @@
 # ADR-0014: Kubernetes environments
 
-- **Status:** Proposed (staging target pending: OQ-7)
+- **Status:** Accepted (2026-10-17 — OQ-7 confirmed using the default: kind on a dedicated VM; a managed cluster stays optional)
 - **Date:** 2026-10-17
 
 ## Context

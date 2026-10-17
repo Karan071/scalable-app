@@ -1,6 +1,6 @@
 # ADR-0004: Casbin policy storage and propagation
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context
