@@ -24,3 +24,11 @@ class Settings(BaseServiceSettings):
     authz_reader_db_user: str = "authz_reader"
     authz_reader_db_password: str
     redis_cache_url: str = "redis://localhost:6380/0"
+
+    # Outbox relay (LLD-08 §5, E2.8). See authz-svc/app/settings.py's
+    # equivalent comment re: the shared-credential deferral.
+    rabbitmq_host: str = "localhost"
+    rabbitmq_port: int = 5672
+    rabbitmq_vhost: str = "/"
+    rabbitmq_user: str
+    rabbitmq_password: str

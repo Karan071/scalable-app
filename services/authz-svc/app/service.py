@@ -16,14 +16,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sf_authz import PolicyEnforcer
-from sf_messaging import add_to_outbox, build_envelope
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import repository
+from .events import emit_mfa_group_sync, emit_role_changed
 from .models import MembershipProjection, RoleAssignment
 from .orgs_client import OrgsClient
-
-_NOTIFY_CHANNEL = "outbox_authz"
 
 #: LLD-02 §11.5: platform-role grants require a recent step-up auth.
 PLATFORM_GRANT_MAX_AUTH_AGE_S = 600
@@ -55,83 +53,6 @@ class LastAdminProtected(Exception):
 
 class RoleNotGrantable(Exception):
     pass
-
-
-async def _emit(
-    session: AsyncSession,
-    *,
-    event_type: str,
-    routing_key: str,
-    aggregate_type: str,
-    aggregate_id: UUID,
-    aggregate_version: int,
-    data: dict[str, object],
-) -> None:
-    envelope = build_envelope(
-        event_type=event_type,
-        source="authz-svc",
-        subject=str(aggregate_id),
-        data=data,
-        schema_version="1.0",
-        aggregate_type=aggregate_type,
-        aggregate_version=aggregate_version,
-    )
-    await add_to_outbox(
-        session,
-        envelope,
-        exchange="sf.events",
-        routing_key=routing_key,
-        aggregate_id=str(aggregate_id),
-        notify_channel=_NOTIFY_CHANNEL,
-    )
-
-
-async def _emit_role_changed(
-    session: AsyncSession, assignment: RoleAssignment, *, actor_id: UUID, change: str
-) -> None:
-    await _emit(
-        session,
-        event_type="membership.role_changed",
-        routing_key="membership.role_changed.v1",
-        aggregate_type="role_assignment",
-        aggregate_id=assignment.id,
-        aggregate_version=assignment.version,
-        data={
-            "org_id": str(assignment.org_id) if assignment.org_id else None,
-            "domain": assignment.domain,
-            "user_id": str(assignment.user_id),
-            "role_id": assignment.role_id,
-            "change": change,
-            "actor_id": str(actor_id),
-        },
-    )
-    await _emit(
-        session,
-        event_type="audit.recorded",
-        routing_key="audit.recorded.v1",
-        aggregate_type="role_assignment",
-        aggregate_id=assignment.id,
-        aggregate_version=assignment.version,
-        data={
-            "action": f"role_assignment.{change}",
-            "actor_id": str(actor_id),
-            "target_user_id": str(assignment.user_id),
-            "role_id": assignment.role_id,
-            "domain": assignment.domain,
-        },
-    )
-
-
-async def _emit_mfa_group_sync(session: AsyncSession, assignment: RoleAssignment) -> None:
-    await _emit(
-        session,
-        event_type="identity.mfa_group_sync_requested",
-        routing_key="identity.mfa_group_sync_requested.v1",
-        aggregate_type="role_assignment",
-        aggregate_id=assignment.id,
-        aggregate_version=assignment.version,
-        data={"user_id": str(assignment.user_id)},
-    )
 
 
 async def _refresh_membership_projection(
@@ -209,9 +130,9 @@ async def assign_role(
         session, user_id=target_user_id, role_id=role_id, domain=domain
     )
     new_version = await repository.bump_policy_version(session)
-    await _emit_role_changed(session, assignment, actor_id=actor_id, change="granted")
+    await emit_role_changed(session, assignment, actor_id=actor_id, change="granted")
     if role.requires_mfa:
-        await _emit_mfa_group_sync(session, assignment)
+        await emit_mfa_group_sync(session, assignment)
     return AssignResult(assignment=assignment, policy_version=new_version)
 
 
@@ -264,9 +185,9 @@ async def assign_platform_role(
         session, user_id=target_user_id, role_id=role_id, domain=domain
     )
     new_version = await repository.bump_policy_version(session)
-    await _emit_role_changed(session, assignment, actor_id=actor_id, change="granted")
+    await emit_role_changed(session, assignment, actor_id=actor_id, change="granted")
     if role.requires_mfa:
-        await _emit_mfa_group_sync(session, assignment)
+        await emit_mfa_group_sync(session, assignment)
     return AssignResult(assignment=assignment, policy_version=new_version)
 
 
@@ -317,5 +238,5 @@ async def revoke_role(
     )
     new_version = await repository.bump_policy_version(session)
     change = "revoked" if not is_self_revoke else "self_revoked"
-    await _emit_role_changed(session, updated, actor_id=actor_id, change=change)
+    await emit_role_changed(session, updated, actor_id=actor_id, change=change)
     return AssignResult(assignment=updated, policy_version=new_version)

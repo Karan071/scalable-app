@@ -1,5 +1,6 @@
 """users-svc entry point (LLD-01 §11)."""
 
+import urllib.parse
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,7 @@ from sf_common import (
     configure_logging,
     install_problem_details,
 )
+from sf_messaging import OutboxRelay
 from sqlalchemy import text
 
 from .db import build_users_engine, build_users_session_factory
@@ -30,10 +32,26 @@ settings = Settings()
 configure_logging(settings)
 
 
+def _amqp_url(settings: Settings) -> str:
+    vhost = urllib.parse.quote(settings.rabbitmq_vhost, safe="")
+    return (
+        f"amqp://{settings.rabbitmq_user}:{settings.rabbitmq_password}"
+        f"@{settings.rabbitmq_host}:{settings.rabbitmq_port}/{vhost}"
+    )
+
+
+def _asyncpg_dsn(settings: Settings) -> str:
+    return (
+        f"postgresql://{settings.db_user}:{settings.db_password}"
+        f"@{settings.db_host}:{settings.db_port}/{settings.db_name}"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = build_users_engine(settings)
-    app.state.session_factory = build_users_session_factory(engine)
+    session_factory = build_users_session_factory(engine)
+    app.state.session_factory = session_factory
     install_token_validator(
         app, TokenValidator(issuer=settings.oidc_issuer, jwks_uri=settings.oidc_jwks_uri)
     )
@@ -51,6 +69,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     watcher = PolicyWatcher(enforcer=enforcer, redis_client=redis)
     await watcher.start()
 
+    relay = OutboxRelay(
+        service_name="users-svc",
+        session_factory=session_factory,
+        dsn_asyncpg=_asyncpg_dsn(settings),
+        amqp_url=_amqp_url(settings),
+        notify_channel="outbox_users",
+    )
+    await relay.start()
+    app.state.relay = relay
+
     http_client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
     app.state.http_client = http_client
     app.state.keycloak_admin = KeycloakAdminClient(
@@ -63,6 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    await relay.stop()
     await watcher.stop()
     await redis.aclose()
     await http_client.aclose()
@@ -85,8 +114,15 @@ async def _authz_ready() -> bool:
         return False
 
 
+async def _relay_ready() -> bool:
+    try:
+        return app.state.relay.is_running
+    except Exception:
+        return False
+
+
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 install_problem_details(app)
-app.include_router(build_health_router(readiness_checks=[_db_ready, _authz_ready]))
+app.include_router(build_health_router(readiness_checks=[_db_ready, _authz_ready, _relay_ready]))
 app.include_router(router)
 assert_routes_covered(app)

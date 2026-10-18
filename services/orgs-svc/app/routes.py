@@ -1,24 +1,24 @@
 """orgs-svc HTTP routes (LLD-03 §8).
 
-Platform admin routes (`/v1/platform/orgs*`) now declare `Authorize(...)`
-(LLD-02 §6), backed by the local Casbin enforcer (E2.7) — these are usable
-today because the platform-role bootstrap path (authz-svc's CLI, LLD-02
-§11.6) already works.
+Every admin-shaped route (`platform_org`, `org_settings`, `member`,
+`invitation`) declares `Authorize(...)` (LLD-02 §6), backed by the local
+Casbin enforcer (E2.7). This was briefly reverted to `AuthenticatedUser()`
+for the org-scoped resources during E2.7: accepting an org's owner
+invitation is supposed to grant that user `org_admin` in authz-svc by
+authz-svc *consuming* orgs-svc's `membership.created` event (LLD-02 §9),
+and that consumer didn't exist yet, so gating on `Authorize(...)` would
+have locked every org's own creator out of their own org. E2.8 (outbox
+relay + inbox) shipped that consumer — verified end to end (create an org
+→ accept the owner invitation → the real event flows through the real
+relay → RabbitMQ → authz-svc's real consumer → grants `org_admin` → these
+routes now actually authorize that owner) — so the retrofit is back.
 
-Org-scoped routes (org_settings, member, invitation) deliberately stay on
-`AuthenticatedUser()` + `_require_active_membership`, NOT `Authorize(...)`,
-even though E2.7 built the enforcer and LLD-02 §4 names these resources.
-Reason, found while wiring this up: accepting the owner invitation is what
-is supposed to grant that user `org_admin` in authz-svc (LLD-03's state
-diagram: "pending --> active: owner accepts invitation (first org_admin)"),
-but that grant happens by authz-svc *consuming* orgs-svc's
-`membership.created` event (LLD-02 §9) — and that consumer doesn't exist
-yet (E2.8: outbox relay + inbox, a later epic). Gating these routes on
-`Authorize(...)` today would lock every org's own creator out of their own
-org, since nobody would ever hold `org_admin` through the normal signup
-flow. Revisit once E2.8 ships the consumer (or a deliberate interim
-synchronous grant is designed and reviewed — not attempted here, since the
-LLD specifies the event-driven path and nothing else).
+`_require_active_membership` stays stacked alongside `Authorize(...)` on
+every org-scoped route as an interim compensating control: it also loads
+the `Membership` row the handler needs (`Authorize` only decides yes/no),
+and it independently re-confirms tenancy while `membership.disabled`'s
+Casbin-side suspension (also shipped in E2.8) is still young enough that
+neither check alone has run through a full milestone of real traffic.
 """
 
 from datetime import datetime
@@ -44,6 +44,22 @@ require_read_platform_org = Authorize("platform_org", "read", domain="platform")
 require_suspend_platform_org = Authorize("platform_org", "suspend", domain="platform")
 require_reactivate_platform_org = Authorize("platform_org", "reactivate", domain="platform")
 require_archive_platform_org = Authorize("platform_org", "archive", domain="platform")
+
+
+def _org_domain(request: Request) -> str:
+    return f"org:{request.path_params['org_id']}"
+
+
+require_read_org_settings = Authorize("org_settings", "read", domain=_org_domain)
+require_update_org_settings = Authorize("org_settings", "update", domain=_org_domain)
+require_read_member = Authorize("member", "read", domain=_org_domain)
+require_disable_member = Authorize("member", "disable", domain=_org_domain)
+require_reactivate_member = Authorize("member", "reactivate", domain=_org_domain)
+require_delete_member = Authorize("member", "delete", domain=_org_domain)
+require_read_invitation = Authorize("invitation", "read", domain=_org_domain)
+require_create_invitation = Authorize("invitation", "create", domain=_org_domain)
+require_update_invitation = Authorize("invitation", "update", domain=_org_domain)
+require_delete_invitation = Authorize("invitation", "delete", domain=_org_domain)
 
 
 def _sf_uid(principal: Principal) -> UUID:
@@ -201,7 +217,7 @@ async def _transition_org(
 async def get_organization(
     org_id: UUID,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_read_org_settings),
 ) -> OrganizationResponse:
     await _require_active_membership(session, org_id=org_id, user_id=_sf_uid(principal))
     org = await repository.get_organization(session, org_id)
@@ -222,7 +238,7 @@ async def update_organization(
     org_id: UUID,
     body: UpdateOrganizationRequest,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_update_org_settings),
 ) -> OrganizationResponse:
     await _require_active_membership(session, org_id=org_id, user_id=_sf_uid(principal))
     current = await repository.get_organization(session, org_id)
@@ -256,7 +272,7 @@ async def list_members(
     org_id: UUID,
     status: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_read_member),
 ) -> list[MembershipResponse]:
     await _require_active_membership(session, org_id=org_id, user_id=_sf_uid(principal))
     members = await repository.list_memberships(session, org_id, status=status)
@@ -269,7 +285,7 @@ async def disable_member(
     membership_id: UUID,
     body: TransitionRequest,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_disable_member),
 ) -> dict[str, str]:
     actor_id = _sf_uid(principal)
     await _require_active_membership(session, org_id=org_id, user_id=actor_id)
@@ -287,7 +303,7 @@ async def reactivate_member(
     org_id: UUID,
     membership_id: UUID,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_reactivate_member),
 ) -> dict[str, str]:
     actor_id = _sf_uid(principal)
     await _require_active_membership(session, org_id=org_id, user_id=actor_id)
@@ -305,7 +321,7 @@ async def revoke_member(
     org_id: UUID,
     membership_id: UUID,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_delete_member),
 ) -> dict[str, str]:
     actor_id = _sf_uid(principal)
     await _require_active_membership(session, org_id=org_id, user_id=actor_id)
@@ -346,7 +362,7 @@ async def list_invitations(
     org_id: UUID,
     status: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_read_invitation),
 ) -> list[InvitationResponse]:
     await _require_active_membership(session, org_id=org_id, user_id=_sf_uid(principal))
     invitations = await repository.list_invitations(session, org_id, status=status)
@@ -369,7 +385,7 @@ async def create_invitation(
     body: CreateInvitationRequest,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_create_invitation),
 ) -> CreateInvitationResponse:
     actor_id = _sf_uid(principal)
     await _require_active_membership(session, org_id=org_id, user_id=actor_id)
@@ -401,7 +417,7 @@ async def resend_invitation(
     invitation_id: UUID,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_update_invitation),
 ) -> CreateInvitationResponse:
     await _require_active_membership(session, org_id=org_id, user_id=_sf_uid(principal))
     try:
@@ -424,7 +440,7 @@ async def revoke_invitation(
     org_id: UUID,
     invitation_id: UUID,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_delete_invitation),
 ) -> dict[str, str]:
     await _require_active_membership(session, org_id=org_id, user_id=_sf_uid(principal))
     try:

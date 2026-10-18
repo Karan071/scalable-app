@@ -18,6 +18,7 @@ def build_envelope(
     correlation_id: str | None = None,
     causation_id: str | None = None,
     traceparent: str | None = None,
+    tracestate: str | None = None,
 ) -> dict[str, Any]:
     """Build one envelope. ``id`` doubles as the outbox row id and AMQP ``message_id``."""
     event_id = uuid7()
@@ -38,7 +39,7 @@ def build_envelope(
         "sfcorrelationid": correlation_id,
         "sfcausationid": causation_id,
         "traceparent": traceparent,
-        "tracestate": "",
+        "tracestate": tracestate or "",
         "data": data,
     }
 

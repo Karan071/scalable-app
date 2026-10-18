@@ -24,3 +24,12 @@ class Settings(BaseServiceSettings):
     orgs_svc_base_url: str
 
     redis_cache_url: str = "redis://localhost:6380/0"
+
+    # Outbox relay + inbox consumer (LLD-08 §5-§6, E2.8). Shared admin-ish
+    # credential pair for now — per-service RabbitMQ users/vhosts are a
+    # deliberate, already-agreed deferral to a future ADR-0003 revisit.
+    rabbitmq_host: str = "localhost"
+    rabbitmq_port: int = 5672
+    rabbitmq_vhost: str = "/"
+    rabbitmq_user: str
+    rabbitmq_password: str

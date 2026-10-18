@@ -127,9 +127,11 @@ Open <http://localhost:15672>.
 | Username | `.env`'s `RABBITMQ_DEFAULT_USER` (default `scaleforge`) |
 | Password | `.env`'s `RABBITMQ_DEFAULT_PASS` (default `rabbitmq_local_dev`) |
 
-Go to the **Exchanges** tab and confirm `scaleforge.events` (type `topic`,
-durable) exists. No queues or bindings yet — those land with the outbox
-epic (E2.8).
+Go to the **Exchanges** tab and confirm `sf.events` and `sf.commands` (type
+`topic`, durable) exist. Go to the **Queues** tab and confirm `q.authz.identity`
+and `q.authz.identity.dlq` (type quorum) exist, with `q.authz.identity` bound
+to `sf.events` on `membership.*.v1`, `organization.*.v1`, `user.created.v1`,
+`user.disabled.v1`, and `user.reactivated.v1` (LLD-08 §2.1, E2.8).
 
 ## 7. Mailpit
 

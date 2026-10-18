@@ -7,7 +7,14 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import CasbinRule, MembershipProjection, PolicyVersion, Role, RoleAssignment
+from .models import (
+    CasbinRule,
+    DomainStatus,
+    MembershipProjection,
+    PolicyVersion,
+    Role,
+    RoleAssignment,
+)
 
 
 class VersionConflict(Exception):
@@ -234,5 +241,168 @@ async def get_membership_projection_for_update(
         select(MembershipProjection)
         .where(MembershipProjection.membership_id == membership_id)
         .with_for_update()
+    )
+    return (await session.execute(stmt)).scalars().one_or_none()
+
+
+# --- event-driven writes (LLD-02 §9, via sf_messaging.InboxConsumer) --------
+
+
+async def grant_role_unconditional(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    role_id: str,
+    domain: str,
+    org_id: UUID | None,
+    membership_id: UUID | None,
+    granted_by: UUID,
+    reason: str | None,
+) -> RoleAssignment | None:
+    """Used by ``membership.created``'s bulk grant and ``user.created``'s
+    customer grant — unconditional (no ``role_grant`` check; see LLD-02 §9
+    and the design note in ``service.py``'s module docstring for why).
+    Returns ``None`` (no-op) if an active/suspended row already exists for
+    this (user, role, domain) — defensive idempotency layered on top of the
+    inbox table's own dedup, in case a handler is ever invoked twice outside
+    of a single message delivery.
+    """
+    existing = await session.execute(
+        select(RoleAssignment.id).where(
+            RoleAssignment.user_id == user_id,
+            RoleAssignment.role_id == role_id,
+            RoleAssignment.domain == domain,
+            RoleAssignment.status != "revoked",
+        )
+    )
+    if existing.first() is not None:
+        return None
+    assignment = await insert_role_assignment(
+        session,
+        user_id=user_id,
+        role_id=role_id,
+        domain=domain,
+        org_id=org_id,
+        membership_id=membership_id,
+        granted_by=granted_by,
+        reason=reason,
+    )
+    await insert_casbin_g_row(session, user_id=user_id, role_id=role_id, domain=domain)
+    return assignment
+
+
+async def suspend_role_assignments_for_membership(
+    session: AsyncSession, *, user_id: UUID, org_id: UUID, reason: str
+) -> list[RoleAssignment]:
+    """``membership.disabled``: active org-domain assignments -> suspended,
+    tagging ``reason`` so a later targeted reactivation knows which ones it
+    caused (reusing the ``reason`` column the same way revoke already
+    overwrites it on status transitions)."""
+    stmt = (
+        update(RoleAssignment)
+        .where(
+            RoleAssignment.user_id == user_id,
+            RoleAssignment.domain == f"org:{org_id}",
+            RoleAssignment.status == "active",
+        )
+        .values(status="suspended", reason=reason, version=RoleAssignment.version + 1)
+        .returning(RoleAssignment)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def reactivate_role_assignments_suspended_for_reason(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    org_id: UUID | None,
+    reason: str,
+    role_id: str | None = None,
+) -> list[RoleAssignment]:
+    """Only rows suspended *for this specific reason* (optionally further
+    narrowed to one ``role_id``) flip back to active — e.g.
+    ``membership.reactivated`` must not resurrect a role ``user.disabled``
+    suspended, and vice versa."""
+    conditions = [
+        RoleAssignment.user_id == user_id,
+        RoleAssignment.status == "suspended",
+        RoleAssignment.reason == reason,
+    ]
+    if org_id is not None:
+        conditions.append(RoleAssignment.domain == f"org:{org_id}")
+    if role_id is not None:
+        conditions.append(RoleAssignment.role_id == role_id)
+    stmt = (
+        update(RoleAssignment)
+        .where(*conditions)
+        .values(status="active", reason=None, version=RoleAssignment.version + 1)
+        .returning(RoleAssignment)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def revoke_role_assignments_for_membership(
+    session: AsyncSession, *, user_id: UUID, org_id: UUID, reason: str
+) -> list[RoleAssignment]:
+    """``membership.revoked``: active or suspended org-domain assignments -> revoked."""
+    stmt = (
+        update(RoleAssignment)
+        .where(
+            RoleAssignment.user_id == user_id,
+            RoleAssignment.domain == f"org:{org_id}",
+            RoleAssignment.status.in_(("active", "suspended")),
+        )
+        .values(
+            status="revoked",
+            revoked_at=datetime.now(UTC),
+            reason=reason,
+            version=RoleAssignment.version + 1,
+        )
+        .returning(RoleAssignment)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def suspend_all_role_assignments_for_user(
+    session: AsyncSession, *, user_id: UUID, reason: str
+) -> list[RoleAssignment]:
+    """``user.disabled``: ALL active assignments for the user, across every
+    domain, -> suspended. Kept distinct from the org-scoped suspend function
+    above since a user can hold roles in many domains at once — the handler
+    must delete each returned row's own ``g``-row by its own ``.domain``,
+    not assume one shared domain."""
+    stmt = (
+        update(RoleAssignment)
+        .where(RoleAssignment.user_id == user_id, RoleAssignment.status == "active")
+        .values(status="suspended", reason=reason, version=RoleAssignment.version + 1)
+        .returning(RoleAssignment)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def upsert_domain_status(
+    session: AsyncSession, *, domain: str, status: str, source_version: int
+) -> DomainStatus | None:
+    """Apply-only-if-newer (LLD-08 §9's out-of-order projection rule).
+    Returns ``None`` if the existing row's ``source_version`` was already
+    >= the incoming one (stale/duplicate event, correctly a no-op)."""
+    stmt = (
+        pg_insert(DomainStatus)
+        .values(
+            domain=domain,
+            status=status,
+            updated_at=datetime.now(UTC),
+            source_version=source_version,
+        )
+        .on_conflict_do_update(
+            index_elements=["domain"],
+            set_={
+                "status": status,
+                "updated_at": datetime.now(UTC),
+                "source_version": source_version,
+            },
+            where=DomainStatus.source_version < source_version,
+        )
+        .returning(DomainStatus)
     )
     return (await session.execute(stmt)).scalars().one_or_none()

@@ -1,10 +1,12 @@
 [project]
 name = "sf-messaging"
 version = "0.1.0"
-description = "Envelope, outbox writer, relay, and inbox-based consumer base. Envelope + outbox writer land with E2.5 (needed by users-svc); the relay and inbox consumer base are E2.8."
+description = "Envelope, transactional outbox writer, outbox relay, and inbox-based consumer base (LLD-08)."
 requires-python = ">=3.13"
 dependencies = [
   "sqlalchemy[asyncio]>=2.0",
+  "aio-pika>=9.4,<10",
+  "asyncpg>=0.29",
 ]
 
 [build-system]

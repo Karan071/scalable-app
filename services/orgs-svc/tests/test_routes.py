@@ -41,10 +41,15 @@ def client() -> Iterator[TestClient]:
 def _as_user(
     sf_uid: UUID, *, email: str = "owner@example.com", email_verified: bool = True
 ) -> None:
-    """Overrides every auth dependency these tests exercise — including the
-    platform_org `Authorize(...)` aliases (E2.7) — so tests keep bypassing
-    the HTTP-layer gate entirely, same as before E2.7 (that gate's own logic
-    is covered by sf-authz's dedicated tests, not re-tested per-service)."""
+    """Overrides every auth dependency these tests exercise — including every
+    `Authorize(...)` alias (E2.7/E2.8) — so tests keep bypassing the
+    HTTP-layer gate entirely, same as before E2.7 (that gate's own logic is
+    covered by sf-authz's dedicated tests, not re-tested per-service). The
+    real event-driven grant this would otherwise require (membership.created
+    -> authz-svc's consumer -> org_admin) is proven separately and for real
+    in authz-svc's own test_e2e_membership_created.py — it can't be
+    exercised here since authz-svc's consumer isn't a running process during
+    orgs-svc's own tests."""
     from app import routes
     from app.main import app
 
@@ -60,6 +65,16 @@ def _as_user(
         "require_suspend_platform_org",
         "require_reactivate_platform_org",
         "require_archive_platform_org",
+        "require_read_org_settings",
+        "require_update_org_settings",
+        "require_read_member",
+        "require_disable_member",
+        "require_reactivate_member",
+        "require_delete_member",
+        "require_read_invitation",
+        "require_create_invitation",
+        "require_update_invitation",
+        "require_delete_invitation",
     ):
         app.dependency_overrides[getattr(routes, name)] = lambda principal=principal: principal
 

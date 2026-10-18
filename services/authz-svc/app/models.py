@@ -146,3 +146,13 @@ class Outbox(Base):
     published_at: Mapped[datetime | None]
     attempts: Mapped[int] = mapped_column(default=0)
     last_error: Mapped[str | None]
+
+
+class Inbox(Base):
+    """LLD-08 §6: idempotent consumption dedup key for sf_messaging.InboxConsumer."""
+
+    __tablename__ = "inbox"
+
+    consumer: Mapped[str] = mapped_column(Text, primary_key=True)
+    message_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    received_at: Mapped[datetime]

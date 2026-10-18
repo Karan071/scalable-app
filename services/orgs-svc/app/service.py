@@ -1,16 +1,28 @@
 """orgs-svc business logic (LLD-03 §4-6).
 
-Two guards LLD-03 specifies are open items here because they depend on
-authz-svc's local Casbin enforcer, which doesn't exist yet (E2.7):
-- checking the inviter actually holds `role_grant:<role>` for each
-  requested role (§6.1) — authz-svc's own `membership.created` consumer
-  already re-checks this independently before granting, so skipping it
-  here is a UX gap (an invite can request a role the inviter can't grant),
-  not a security one;
-- the last-active-org_admin guard on disable/revoke/leave (§5) — orgs-svc
-  has no visibility into who holds which role at all (that's authz-svc's
-  `role_assignments` table, by design: "orgs-svc owns *who is a member*;
-  authz-svc owns *what members may do*", LLD-03 §1).
+One guard LLD-03 names is a deliberately accepted gap, not a TODO:
+checking the inviter actually holds `role_grant:<role>` for each requested
+role (§6.1) is NOT done here, and authz-svc's `membership.created`
+consumer (E2.8) does not re-check it either — it grants every role in
+`roles_requested` unconditionally. Reason: an org's very first invitation
+(the owner invitation, created by `create_organization` on a platform
+admin's behalf) has no existing grant-holder to check against — platform
+roles don't match an org domain (confirmed: `role:super_user`'s policy row
+is `dom="platform"` literally, never `"*"`), so requiring a check at grant
+time would make it impossible for any org to ever get its first
+`org_admin`. The actual security boundary is who can create an invitation
+at all (`Authorize("invitation","create",...)` + `_require_active_membership`
+on `POST /v1/orgs/{org_id}/invitations`), not what roles they request in
+it — an org_admin without `role_grant:inventory_manager` could still
+invite someone as `inventory_manager`, a UX gap, not a security one.
+
+The last-active-org_admin guard on disable/revoke/leave (§5) stays an open
+item here for the same structural reason LLD-03 §1 names: orgs-svc has no
+visibility into who holds which role at all (that's authz-svc's
+`role_assignments` table — "orgs-svc owns *who is a member*; authz-svc
+owns *what members may do*"). authz-svc's own `revoke_role` enforces this
+guard for direct role-assignment revocation (LLD-02 §11 rule 4); orgs-svc's
+membership-level operations don't have an equivalent check.
 """
 
 import hashlib
@@ -194,8 +206,17 @@ async def transition_organization(
     )
     if updated is None:
         raise NotFoundError(org_id)
+    # The event name is the *transition* (LLD-08 §4.1, LLD-02 §9: "suspended"
+    # / "reactivated" / "archived"), not the resulting status column value —
+    # "reactivate" lands the org back in status "active", but the event is
+    # "organization.reactivated", never "organization.active" (that string
+    # isn't in any event catalog and authz-svc's consumer wouldn't dispatch
+    # on it).
+    event_name = {"suspend": "suspended", "reactivate": "reactivated", "archive": "archived"}[
+        action
+    ]
     await _emit_org_event(
-        session, updated, f"organization.{new_status}", f"organization.{new_status}.v1"
+        session, updated, f"organization.{event_name}", f"organization.{event_name}.v1"
     )
     return updated
 
