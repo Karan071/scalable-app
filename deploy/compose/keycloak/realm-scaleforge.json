@@ -54,6 +54,11 @@
       "name": "users:read",
       "protocol": "openid-connect",
       "description": "users-svc GET /internal/v1/users:batch (LLD-01 \u00a711.3)"
+    },
+    {
+      "name": "orgs:read",
+      "protocol": "openid-connect",
+      "description": "orgs-svc GET /internal/v1/memberships/{id} (LLD-03 \u00a78, LLD-02 \u00a77)"
     }
   ],
   "clients": [
@@ -167,7 +172,22 @@
       "secret": "$(SF_SVC_AUTHZ_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": true
+      "serviceAccountsEnabled": true,
+      "defaultClientScopes": [
+        "orgs:read"
+      ],
+      "protocolMappers": [
+        {
+          "name": "scaleforge-internal-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "scaleforge-internal",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "sf-users-admin",

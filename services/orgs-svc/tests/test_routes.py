@@ -41,14 +41,27 @@ def client() -> Iterator[TestClient]:
 def _as_user(
     sf_uid: UUID, *, email: str = "owner@example.com", email_verified: bool = True
 ) -> None:
+    """Overrides every auth dependency these tests exercise — including the
+    platform_org `Authorize(...)` aliases (E2.7) — so tests keep bypassing
+    the HTTP-layer gate entirely, same as before E2.7 (that gate's own logic
+    is covered by sf-authz's dedicated tests, not re-tested per-service)."""
+    from app import routes
     from app.main import app
-    from app.routes import require_authenticated_user
 
-    app.dependency_overrides[require_authenticated_user] = lambda: Principal(
+    principal = Principal(
         subject=f"user:{sf_uid}",
         audiences=("scaleforge-api",),
         claims={"sf_uid": str(sf_uid), "email": email, "email_verified": email_verified},
     )
+    for name in (
+        "require_authenticated_user",
+        "require_create_platform_org",
+        "require_read_platform_org",
+        "require_suspend_platform_org",
+        "require_reactivate_platform_org",
+        "require_archive_platform_org",
+    ):
+        app.dependency_overrides[getattr(routes, name)] = lambda principal=principal: principal
 
 
 def _unique_slug() -> str:

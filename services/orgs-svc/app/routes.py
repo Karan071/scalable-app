@@ -1,11 +1,24 @@
 """orgs-svc HTTP routes (LLD-03 §8).
 
-None of these declare `Authorize(...)` yet (LLD-02 §6) — that needs the
-Casbin local enforcer (E2.7, open item). In its place, org-scoped routes
-require the caller to be an *active member* of the path org (checked
-locally against this service's own `memberships` table) — real tenant
-isolation (FR-ORG-04), just not role-grained. Platform routes only require
-an authenticated caller for now (open item: `platform_org:*` + step-up).
+Platform admin routes (`/v1/platform/orgs*`) now declare `Authorize(...)`
+(LLD-02 §6), backed by the local Casbin enforcer (E2.7) — these are usable
+today because the platform-role bootstrap path (authz-svc's CLI, LLD-02
+§11.6) already works.
+
+Org-scoped routes (org_settings, member, invitation) deliberately stay on
+`AuthenticatedUser()` + `_require_active_membership`, NOT `Authorize(...)`,
+even though E2.7 built the enforcer and LLD-02 §4 names these resources.
+Reason, found while wiring this up: accepting the owner invitation is what
+is supposed to grant that user `org_admin` in authz-svc (LLD-03's state
+diagram: "pending --> active: owner accepts invitation (first org_admin)"),
+but that grant happens by authz-svc *consuming* orgs-svc's
+`membership.created` event (LLD-02 §9) — and that consumer doesn't exist
+yet (E2.8: outbox relay + inbox, a later epic). Gating these routes on
+`Authorize(...)` today would lock every org's own creator out of their own
+org, since nobody would ever hold `org_admin` through the normal signup
+flow. Revisit once E2.8 ships the consumer (or a deliberate interim
+synchronous grant is designed and reviewed — not attempted here, since the
+LLD specifies the event-driven path and nothing else).
 """
 
 from datetime import datetime
@@ -13,7 +26,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sf_authz import AuthenticatedUser, Internal, Principal
+from sf_authz import AuthenticatedUser, Authorize, Internal, Principal
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +38,12 @@ router = APIRouter()
 
 require_authenticated_user = AuthenticatedUser()
 require_internal_read_scope = Internal("orgs:read")
+
+require_create_platform_org = Authorize("platform_org", "create", domain="platform")
+require_read_platform_org = Authorize("platform_org", "read", domain="platform")
+require_suspend_platform_org = Authorize("platform_org", "suspend", domain="platform")
+require_reactivate_platform_org = Authorize("platform_org", "reactivate", domain="platform")
+require_archive_platform_org = Authorize("platform_org", "archive", domain="platform")
 
 
 def _sf_uid(principal: Principal) -> UUID:
@@ -103,7 +122,7 @@ async def create_organization(
     body: CreateOrganizationRequest,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    principal: Principal = Depends(require_authenticated_user),
+    principal: Principal = Depends(require_create_platform_org),
 ) -> OrganizationResponse:
     try:
         created = await service.create_organization(
@@ -127,7 +146,7 @@ async def create_organization(
 async def list_platform_organizations(
     status: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_authenticated_user),
+    _: Principal = Depends(require_read_platform_org),
 ) -> list[OrganizationResponse]:
     orgs = await repository.list_organizations(session, status=status)
     return [_org_out(o) for o in orgs]
@@ -142,7 +161,7 @@ async def suspend_organization(
     org_id: UUID,
     body: TransitionRequest,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_authenticated_user),
+    _: Principal = Depends(require_suspend_platform_org),
 ) -> OrganizationResponse:
     return await _transition_org(session, org_id, action="suspend", reason=body.reason)
 
@@ -151,7 +170,7 @@ async def suspend_organization(
 async def reactivate_organization(
     org_id: UUID,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_authenticated_user),
+    _: Principal = Depends(require_reactivate_platform_org),
 ) -> OrganizationResponse:
     return await _transition_org(session, org_id, action="reactivate", reason=None)
 
@@ -161,7 +180,7 @@ async def archive_organization(
     org_id: UUID,
     body: TransitionRequest,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_authenticated_user),
+    _: Principal = Depends(require_archive_platform_org),
 ) -> OrganizationResponse:
     return await _transition_org(session, org_id, action="archive", reason=body.reason)
 

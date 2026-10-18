@@ -4,7 +4,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from sf_authz import TokenValidator, install_token_validator
+from redis.asyncio import Redis
+from sf_authz import (
+    PolicyWatcher,
+    TokenValidator,
+    assert_routes_covered,
+    build_enforcer,
+    install_enforcer,
+    install_token_validator,
+)
 from sf_common import (
     TokenCipher,
     build_health_router,
@@ -32,7 +40,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     install_token_validator(
         app, TokenValidator(issuer=settings.oidc_issuer, jwks_uri=settings.oidc_jwks_uri)
     )
+
+    enforcer = build_enforcer(
+        db_host=settings.db_host,
+        db_port=settings.db_port,
+        db_name=settings.db_name,
+        db_user=settings.authz_reader_db_user,
+        db_password=settings.authz_reader_db_password,
+    )
+    enforcer.load()
+    install_enforcer(app, enforcer)
+    redis = Redis.from_url(settings.redis_cache_url, decode_responses=True)
+    watcher = PolicyWatcher(enforcer=enforcer, redis_client=redis)
+    await watcher.start()
+
     yield
+
+    await watcher.stop()
+    await redis.aclose()
     await engine.dispose()
 
 
@@ -45,7 +70,15 @@ async def _db_ready() -> bool:
         return False
 
 
+async def _authz_ready() -> bool:
+    try:
+        return app.state.authz_enforcer.staleness_s() < 300.0
+    except Exception:
+        return False
+
+
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 install_problem_details(app)
-app.include_router(build_health_router(readiness_checks=[_db_ready]))
+app.include_router(build_health_router(readiness_checks=[_db_ready, _authz_ready]))
 app.include_router(router)
+assert_routes_covered(app)

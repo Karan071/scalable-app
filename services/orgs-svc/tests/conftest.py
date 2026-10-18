@@ -16,3 +16,6 @@ os.environ.setdefault(
     "SF_INVITATION_ENC_KEYS", '{"k1": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}'
 )
 os.environ.setdefault("SF_INVITATION_ENC_PRIMARY_KID", "k1")
+os.environ.setdefault("SF_AUTHZ_READER_DB_USER", "authz_reader")
+os.environ.setdefault("SF_AUTHZ_READER_DB_PASSWORD", "app_local_dev")
+os.environ.setdefault("SF_REDIS_CACHE_URL", "redis://localhost:6380/0")

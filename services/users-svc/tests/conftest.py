@@ -14,3 +14,6 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SF_KEYCLOAK_ADMIN_BASE_URL", "https://kc.test/admin/realms/scaleforge")
 os.environ.setdefault("SF_KEYCLOAK_ADMIN_CLIENT_SECRET", "test-admin-secret")
+os.environ.setdefault("SF_AUTHZ_READER_DB_USER", "authz_reader")
+os.environ.setdefault("SF_AUTHZ_READER_DB_PASSWORD", "app_local_dev")
+os.environ.setdefault("SF_REDIS_CACHE_URL", "redis://localhost:6380/0")

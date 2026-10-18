@@ -1,11 +1,16 @@
 [project]
 name = "sf-authz"
 version = "0.1.0"
-description = "JWT validation, Casbin enforcer, policy watcher, and route-coverage guard. Token validation and Internal()/AuthenticatedUser()/Public() land with E2.5 (needed by users-svc); the Casbin enforcer, watcher, and route-coverage guard are E2.7."
+description = "JWT validation, Casbin enforcer, policy watcher, and route-coverage guard (LLD-02, ADR-0004/0005/0009)."
 requires-python = ">=3.13"
 dependencies = [
   "pyjwt[crypto]>=2.9",
   "fastapi>=0.115",
+  "casbin>=1.37",
+  "casbin_sqlalchemy_adapter>=1.3",
+  "sqlalchemy[asyncio]>=2.0",
+  "psycopg2-binary>=2.9",
+  "redis>=5.0",
 ]
 
 [build-system]
@@ -14,3 +19,4 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sf_authz"]
+artifacts = ["src/sf_authz/model.conf"]

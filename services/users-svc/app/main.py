@@ -5,7 +5,15 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
-from sf_authz import TokenValidator, install_token_validator
+from redis.asyncio import Redis
+from sf_authz import (
+    PolicyWatcher,
+    TokenValidator,
+    assert_routes_covered,
+    build_enforcer,
+    install_enforcer,
+    install_token_validator,
+)
 from sf_common import (
     build_health_router,
     configure_logging,
@@ -30,6 +38,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app, TokenValidator(issuer=settings.oidc_issuer, jwks_uri=settings.oidc_jwks_uri)
     )
 
+    enforcer = build_enforcer(
+        db_host=settings.db_host,
+        db_port=settings.db_port,
+        db_name=settings.db_name,
+        db_user=settings.authz_reader_db_user,
+        db_password=settings.authz_reader_db_password,
+    )
+    enforcer.load()
+    install_enforcer(app, enforcer)
+    redis = Redis.from_url(settings.redis_cache_url, decode_responses=True)
+    watcher = PolicyWatcher(enforcer=enforcer, redis_client=redis)
+    await watcher.start()
+
     http_client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
     app.state.http_client = http_client
     app.state.keycloak_admin = KeycloakAdminClient(
@@ -42,6 +63,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    await watcher.stop()
+    await redis.aclose()
     await http_client.aclose()
     await engine.dispose()
 
@@ -55,7 +78,15 @@ async def _db_ready() -> bool:
         return False
 
 
+async def _authz_ready() -> bool:
+    try:
+        return app.state.authz_enforcer.staleness_s() < 300.0
+    except Exception:
+        return False
+
+
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 install_problem_details(app)
-app.include_router(build_health_router(readiness_checks=[_db_ready]))
+app.include_router(build_health_router(readiness_checks=[_db_ready, _authz_ready]))
 app.include_router(router)
+assert_routes_covered(app)

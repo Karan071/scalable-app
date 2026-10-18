@@ -38,6 +38,7 @@ extend-immutable-calls = [
   "sf_authz.Internal",
   "sf_authz.AuthenticatedUser",
   "sf_authz.Public",
+  "sf_authz.Authorize",
 ]
 
 [tool.pytest.ini_options]
@@ -48,3 +49,8 @@ asyncio_mode = "auto"
 # (pydantic-settings fills them from the environment at runtime, but mypy
 # can't see that without this plugin): confirmed on users-svc's Settings.
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Neither ships a py.typed marker or stubs.
+module = ["casbin", "casbin_sqlalchemy_adapter"]
+ignore_missing_imports = true

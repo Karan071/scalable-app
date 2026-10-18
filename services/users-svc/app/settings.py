@@ -19,3 +19,8 @@ class Settings(BaseServiceSettings):
     keycloak_admin_base_url: str
     keycloak_admin_client_id: str = "sf-users-admin"
     keycloak_admin_client_secret: str
+
+    # Embedded Casbin enforcer (ADR-0005: every service enforces locally).
+    authz_reader_db_user: str = "authz_reader"
+    authz_reader_db_password: str
+    redis_cache_url: str = "redis://localhost:6380/0"

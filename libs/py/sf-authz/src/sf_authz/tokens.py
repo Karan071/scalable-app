@@ -25,6 +25,13 @@ class Principal:
     def scopes(self) -> frozenset[str]:
         return frozenset(str(self.claims.get("scope", "")).split())
 
+    def casbin_subject(self) -> str:
+        """``user:<sf_uid>`` (LLD-02 §2). Raises if the token predates sf_uid provisioning."""
+        sf_uid = self.claim("sf_uid")
+        if sf_uid is None:
+            raise TokenValidationError("token has no sf_uid claim yet; refresh required")
+        return f"user:{sf_uid}"
+
 
 class TokenValidator:
     """Validates Keycloak-issued JWTs. One instance per service process.
