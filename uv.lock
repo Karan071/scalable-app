@@ -1808,6 +1808,7 @@ name = "scaleforge-bff"
 version = "0.1.0"
 source = { editable = "services/bff" }
 dependencies = [
+    { name = "aio-pika" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "redis" },
@@ -1818,6 +1819,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aio-pika", specifier = ">=9.4,<10" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "redis", specifier = ">=5.0" },

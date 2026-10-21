@@ -397,3 +397,39 @@ def test_list_members_does_not_populate_org_name(client: TestClient) -> None:
 
     assert resp.status_code == 200
     assert all(m["org_name"] is None for m in resp.json())
+
+
+def test_create_invitation_ignores_mass_assignment_fields(client: TestClient) -> None:
+    """LLD-14 §4 privilege escalation: extra body fields an attacker might
+    hope get merged into the entity (org_id pointing elsewhere, a status
+    override, a role-escalating 'role' singular field CreateInvitationRequest
+    never declared) must have zero effect -- Pydantic's whitelist-based
+    deserialization only reads declared fields, never dict-merges the body."""
+    creator = uuid4()
+    org = _create_org(client, creator)
+    other_org_id = str(uuid7())
+    _as_user(creator)
+
+    resp = client.post(
+        f"/v1/orgs/{org['id']}/invitations",
+        json={
+            "email": "mass-assignment@example.com",
+            "roles_requested": ["org_admin"],
+            # None of these are declared on CreateInvitationRequest.
+            "org_id": other_org_id,
+            "status": "accepted",
+            "role": "super_user",
+            "id": str(uuid7()),
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    invitations = client.get(f"/v1/orgs/{org['id']}/invitations").json()
+    created = next(i for i in invitations if i["email"] == "mass-assignment@example.com")
+    # It landed on the org from the URL, not the attacker-supplied org_id.
+    assert created["org_id"] == org["id"]
+    assert created["status"] == "pending"  # not "accepted" from the extra field
+
+    # And the other org was never touched at all.
+    other_invitations = client.get(f"/v1/orgs/{other_org_id}/invitations")
+    assert other_invitations.status_code in (403, 404)

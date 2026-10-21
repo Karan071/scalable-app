@@ -1,5 +1,6 @@
 """bff entry point (LLD-01 §2)."""
 
+import urllib.parse
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -16,6 +17,7 @@ from sf_common import (
     instrument_fastapi_app,
 )
 
+from .event_consumer import IdentityEventConsumer
 from .oidc import OidcClient, discover
 from .proxy import ConcurrencyGate
 from .proxy import router as api_router
@@ -27,6 +29,14 @@ from .users_client import ServiceTokenSource, UsersClient
 settings = Settings()
 configure_logging(settings)
 init_telemetry(settings)
+
+
+def _amqp_url(settings: Settings) -> str:
+    vhost = urllib.parse.quote(settings.rabbitmq_vhost, safe="")
+    return (
+        f"amqp://{settings.rabbitmq_user}:{settings.rabbitmq_password}"
+        f"@{settings.rabbitmq_host}:{settings.rabbitmq_port}/{vhost}"
+    )
 
 
 @asynccontextmanager
@@ -63,8 +73,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.api_proxy_gate = ConcurrencyGate(settings.api_proxy_max_concurrency)
 
+    identity_consumer = IdentityEventConsumer(
+        redis=redis,
+        sessions=app.state.sessions,
+        amqp_url=_amqp_url(settings),
+        queue_name="q.bff.identity",
+    )
+    await identity_consumer.start()
+    app.state.identity_consumer = identity_consumer
+
     yield
 
+    await identity_consumer.stop()
     await http_client.aclose()
     await redis.aclose()
 
@@ -77,10 +97,17 @@ async def _redis_ready() -> bool:
         return False
 
 
+async def _identity_consumer_ready() -> bool:
+    try:
+        return app.state.identity_consumer.is_running
+    except Exception:
+        return False
+
+
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
 install_problem_details(app)
-app.include_router(build_health_router(readiness_checks=[_redis_ready]))
+app.include_router(build_health_router(readiness_checks=[_redis_ready, _identity_consumer_ready]))
 app.include_router(auth_router)
 app.include_router(api_router)
 instrument_fastapi_app(app)

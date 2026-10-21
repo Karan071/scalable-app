@@ -16,3 +16,5 @@ os.environ.setdefault(
     "SF_SESSION_ENC_KEYS", '{"k1": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}'
 )
 os.environ.setdefault("SF_SESSION_ENC_PRIMARY_KID", "k1")
+os.environ.setdefault("SF_RABBITMQ_USER", "scaleforge")
+os.environ.setdefault("SF_RABBITMQ_PASSWORD", "rabbitmq_local_dev")

@@ -41,6 +41,15 @@ class Settings(BaseServiceSettings):
 
     clock_leeway_s: int = 60
 
+    # Identity event consumer (LLD-01 §8: user.disabled -> revoke all
+    # sessions within the target). Shared credential pair; per-service
+    # RabbitMQ users/vhosts are a deliberate deferral (future ADR-0003 item).
+    rabbitmq_host: str = "localhost"
+    rabbitmq_port: int = 5672
+    rabbitmq_vhost: str = "/"
+    rabbitmq_user: str
+    rabbitmq_password: str
+
     @field_validator("session_enc_keys", mode="before")
     @classmethod
     def _parse_json_dict(cls, value: object) -> object:

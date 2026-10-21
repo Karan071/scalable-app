@@ -213,3 +213,31 @@ def test_disable_platform_user_404_for_unknown_user(client: TestClient) -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_patch_me_ignores_mass_assignment_fields(client: TestClient) -> None:
+    """LLD-14 §4 privilege escalation: UpdateMeRequest declares only
+    display_name/handle -- a self-service PATCH can't smuggle in a status
+    change, someone else's id, or a version bump via extra body fields."""
+    provisioned = client.post("/internal/v1/users:provision", json=_unique_identity()).json()
+    other_user = client.post("/internal/v1/users:provision", json=_unique_identity()).json()
+    _as_user(client, UUID(provisioned["user_id"]))
+
+    response = client.patch(
+        "/v1/me",
+        json={
+            "display_name": "Still Just Me",
+            # None of these are declared on UpdateMeRequest.
+            "status": "disabled",
+            "id": other_user["user_id"],
+            "version": 99,
+            "email": "attacker-controlled@example.com",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == provisioned["user_id"]  # still themselves, not other_user
+    assert body["status"] == "active"  # not "disabled" from the extra field
+    assert body["version"] == 2  # a normal single increment, not 99
+    assert body["email"].lower() != "attacker-controlled@example.com"

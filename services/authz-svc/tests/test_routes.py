@@ -207,3 +207,35 @@ def test_my_role_assignments_excludes_other_users(client: TestClient) -> None:
 
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_assign_org_role_ignores_mass_assignment_fields(client: TestClient) -> None:
+    """LLD-14 §4 privilege escalation: AssignRoleRequest declares only
+    user_id/role_id/membership_id/reason -- extra fields an attacker might
+    hope flow straight into the entity (a pre-set status, a spoofed
+    granted_by, a version bump to dodge optimistic-concurrency checks
+    elsewhere) must have zero effect."""
+    org_id, actor_id, target_id, membership_id = uuid7(), uuid7(), uuid7(), uuid7()
+    attacker_claimed_grantor = uuid7()
+    _setup_org_admin(client, org_id=org_id, actor_id=actor_id)
+    override_all_as(client.app, actor_id, acr=2)
+    client.app.state.orgs_client = FakeOrgsClient(default_user_id=target_id)
+
+    resp = client.post(
+        f"/v1/orgs/{org_id}/role-assignments",
+        json={
+            "user_id": str(target_id),
+            "role_id": "catalog_manager",
+            "membership_id": str(membership_id),
+            # None of these are declared on AssignRoleRequest.
+            "status": "suspended",
+            "granted_by": str(attacker_claimed_grantor),
+            "version": 99,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "active"  # not "suspended" from the extra field
+    assert body["granted_by"] == str(actor_id)  # the real actor, not the spoofed one
+    assert body["version"] == 1  # not 99

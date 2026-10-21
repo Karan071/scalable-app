@@ -202,6 +202,18 @@ services:
         curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.audit.ingest" \
           -H 'content-type: application/json' \
           -d '{"routing_key":"audit.recorded.v1"}'
+
+        # q.bff.identity (E2.12): the BFF consumes user.disabled.v1 to
+        # revoke all of a disabled user's sessions (LLD-01 §8).
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.bff.identity.dlq" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.bff.identity" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.bff.identity.dlq"}}'
+        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.bff.identity" \
+          -H 'content-type: application/json' \
+          -d '{"routing_key":"user.disabled.v1"}'
     restart: "no"
 
   mailpit:
