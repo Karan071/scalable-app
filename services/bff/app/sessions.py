@@ -158,6 +158,37 @@ class SessionStore:
             v=int(raw["v"]),
         )
 
+    async def peek_access_token(self, session_id: str) -> tuple[str, int] | None:
+        """Reads just ``at``/``at_exp`` without touching ``last_seen``/TTL —
+        used by the refresh-lock's losing side to pick up a winner's refresh
+        (LLD-01 §6) without re-running ``load()``'s idle-touch side effects."""
+        h = key_hash(session_id)
+        at_enc, at_exp_raw = await self._redis.hmget(_redis_key(h), ["at", "at_exp"])
+        if at_enc is None or at_exp_raw is None:
+            return None
+        aad = h.encode()
+        return self._cipher.decrypt(str(at_enc), aad=aad), int(str(at_exp_raw))
+
+    async def update_tokens(
+        self, session_id: str, *, access_token: str, refresh_token: str, at_exp: int
+    ) -> None:
+        """In-place refresh (LLD-01 §6): no session-id rotation, so a
+        concurrent request already holding this cookie keeps working. Silently
+        no-ops if the session has meanwhile been deleted (e.g. revoked
+        elsewhere) — the caller re-reads/re-authenticates on its own next load."""
+        h = key_hash(session_id)
+        if not await self._redis.exists(_redis_key(h)):
+            return
+        aad = h.encode()
+        await self._redis.hset(
+            _redis_key(h),
+            mapping={
+                "at": self._cipher.encrypt(access_token, aad=aad),
+                "rt": self._cipher.encrypt(refresh_token, aad=aad),
+                "at_exp": at_exp,
+            },
+        )
+
     async def delete(self, session_id: str) -> None:
         h = key_hash(session_id)
         raw = _as_str_dict(await self._redis.hgetall(_redis_key(h)))

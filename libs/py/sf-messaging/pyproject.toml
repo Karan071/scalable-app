@@ -7,6 +7,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0",
   "aio-pika>=9.4,<10",
   "asyncpg>=0.29",
+  "opentelemetry-api>=1.45",
 ]
 
 [build-system]

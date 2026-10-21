@@ -158,3 +158,52 @@ def test_list_roles_is_self_scoped(client: TestClient) -> None:
     role_ids = {r["id"] for r in resp.json()}
     assert "org_admin" in role_ids
     assert "super_user" in role_ids
+
+
+def test_my_role_assignments_spans_every_domain(client: TestClient) -> None:
+    org_id, actor_id = uuid7(), uuid7()
+    asyncio.run(
+        grant_role_directly(
+            user_id=actor_id,
+            role_id="org_admin",
+            domain=f"org:{org_id}",
+            org_id=org_id,
+            granted_by=actor_id,
+        )
+    )
+    asyncio.run(
+        grant_role_directly(
+            user_id=actor_id,
+            role_id="super_user",
+            domain="platform",
+            org_id=None,
+            granted_by=actor_id,
+        )
+    )
+    override_all_as(client.app, actor_id, acr=0)
+
+    resp = client.get("/v1/me/role-assignments")
+
+    assert resp.status_code == 200
+    by_domain = {(a["domain"], a["role_id"]) for a in resp.json()}
+    assert (f"org:{org_id}", "org_admin") in by_domain
+    assert ("platform", "super_user") in by_domain
+
+
+def test_my_role_assignments_excludes_other_users(client: TestClient) -> None:
+    actor_id, other_id = uuid7(), uuid7()
+    asyncio.run(
+        grant_role_directly(
+            user_id=other_id,
+            role_id="super_user",
+            domain="platform",
+            org_id=None,
+            granted_by=other_id,
+        )
+    )
+    override_all_as(client.app, actor_id, acr=0)
+
+    resp = client.get("/v1/me/role-assignments")
+
+    assert resp.status_code == 200
+    assert resp.json() == []

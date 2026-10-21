@@ -16,9 +16,12 @@ from sf_authz import (
     install_token_validator,
 )
 from sf_common import (
+    CorrelationIdMiddleware,
     build_health_router,
     configure_logging,
+    init_telemetry,
     install_problem_details,
+    instrument_fastapi_app,
 )
 from sf_messaging import OutboxRelay
 from sqlalchemy import text
@@ -30,6 +33,7 @@ from .settings import Settings
 
 settings = Settings()
 configure_logging(settings)
+init_telemetry(settings)
 
 
 def _amqp_url(settings: Settings) -> str:
@@ -122,7 +126,9 @@ async def _relay_ready() -> bool:
 
 
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
 install_problem_details(app)
 app.include_router(build_health_router(readiness_checks=[_db_ready, _authz_ready, _relay_ready]))
 app.include_router(router)
 assert_routes_covered(app)
+instrument_fastapi_app(app)

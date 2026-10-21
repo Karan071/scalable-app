@@ -1,9 +1,8 @@
 """users-svc business logic: provisioning and lifecycle (LLD-01 §11.2, §11.3).
 
-Platform-admin disable/reactivate have no HTTP route yet: LLD-01 §11.3 gates
-them on Casbin ``platform: users manage`` plus BFF step-up, neither of which
-exist before authz-svc/BFF (E2.7/E2.4). The state-machine logic below is
-ready for that route once it lands (open item).
+Platform-admin disable/reactivate are exposed via
+``POST /v1/platform/users/{id}:disable|:reactivate`` (routes.py, E2.10),
+gated on Casbin ``platform_user:manage`` plus the BFF's step-up flow.
 """
 
 from dataclasses import dataclass

@@ -80,9 +80,7 @@ def test_allowed_request_reaches_the_handler(jwks_server: str, sign_token) -> No
     client = TestClient(_app(jwks_server, enforcer))
     token = sign_token(_claims())
 
-    response = client.get(
-        "/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"}
-    )
+    response = client.get("/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200
     assert enforcer.enforce_calls == [
@@ -95,9 +93,7 @@ def test_denied_request_returns_403_forbidden(jwks_server: str, sign_token) -> N
     client = TestClient(_app(jwks_server, enforcer))
     token = sign_token(_claims())
 
-    response = client.get(
-        "/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"}
-    )
+    response = client.get("/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "forbidden"
@@ -118,9 +114,7 @@ def test_suspended_domain_returns_403_org_suspended(jwks_server: str, sign_token
     client = TestClient(_app(jwks_server, enforcer))
     token = sign_token(_claims())
 
-    response = client.get(
-        "/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"}
-    )
+    response = client.get("/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "org_suspended"
@@ -131,9 +125,7 @@ def test_stale_policy_past_300s_returns_503(jwks_server: str, sign_token) -> Non
     client = TestClient(_app(jwks_server, enforcer))
     token = sign_token(_claims())
 
-    response = client.get(
-        "/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"}
-    )
+    response = client.get("/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 503
     assert response.json()["detail"] == "authz_stale"
@@ -171,8 +163,6 @@ def test_token_missing_sf_uid_claim_returns_403(jwks_server: str, sign_token) ->
     del claims["sf_uid"]
     token = sign_token(claims)
 
-    response = client.get(
-        "/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"}
-    )
+    response = client.get("/v1/orgs/O1/members", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 403

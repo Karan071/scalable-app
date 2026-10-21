@@ -95,9 +95,15 @@ def _org_out(org: Organization) -> "OrganizationResponse":
     )
 
 
-def _membership_out(m: Membership) -> "MembershipResponse":
+def _membership_out(m: Membership, *, org: Organization | None = None) -> "MembershipResponse":
     return MembershipResponse(
-        id=m.id, org_id=m.org_id, user_id=m.user_id, status=m.status, version=m.version
+        id=m.id,
+        org_id=m.org_id,
+        user_id=m.user_id,
+        status=m.status,
+        version=m.version,
+        org_name=org.name if org is not None else None,
+        org_slug=org.slug if org is not None else None,
     )
 
 
@@ -265,6 +271,11 @@ class MembershipResponse(BaseModel):
     user_id: UUID
     status: str
     version: int
+    # Only populated by GET /v1/me/memberships (E2.10): the caller already
+    # knows which one org they're asking about on every other route that
+    # reuses this response model, so there's no reason to pay for the join.
+    org_name: str | None = None
+    org_slug: str | None = None
 
 
 @router.get("/v1/orgs/{org_id}/members", response_model=list[MembershipResponse])
@@ -485,7 +496,15 @@ async def my_memberships(
     principal: Principal = Depends(require_authenticated_user),
 ) -> list[MembershipResponse]:
     memberships = await repository.list_memberships_for_user(session, _sf_uid(principal))
-    return [_membership_out(m) for m in memberships]
+    orgs_by_id = {
+        org.id: org
+        for org in [
+            await repository.get_organization(session, org_id)
+            for org_id in {m.org_id for m in memberships}
+        ]
+        if org is not None
+    }
+    return [_membership_out(m, org=orgs_by_id.get(m.org_id)) for m in memberships]
 
 
 @router.get("/internal/v1/memberships/{membership_id}", response_model=MembershipResponse)

@@ -74,6 +74,26 @@ async def is_handle_taken(session: AsyncSession, handle_normalized: str) -> bool
     return (await session.execute(stmt)).first() is not None
 
 
+async def list_users(
+    session: AsyncSession,
+    *,
+    search: str | None = None,
+    cursor_id: UUID | None = None,
+    limit: int = 50,
+) -> list[User]:
+    """Keyset pagination over ``id`` (uuid7, so insertion-ordered already —
+    no separate ``created_at`` tiebreak needed). Backs the platform admin
+    users list (E2.10, LLD-01 §11.3's documented open item)."""
+    stmt = select(User).order_by(User.id)
+    if search is not None:
+        pattern = f"%{search}%"
+        stmt = stmt.where((User.handle.ilike(pattern)) | (User.email.ilike(pattern)))
+    if cursor_id is not None:
+        stmt = stmt.where(User.id > cursor_id)
+    stmt = stmt.limit(limit)
+    return list((await session.execute(stmt)).scalars().all())
+
+
 async def update_profile(
     session: AsyncSession,
     user_id: UUID,

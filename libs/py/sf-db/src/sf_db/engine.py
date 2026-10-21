@@ -5,6 +5,7 @@ handling and one for each background worker (relay, sweepers), so a backlog
 in one cannot starve the other (the "bulkhead" row in LLD-09 §2).
 """
 
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from sqlalchemy import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -34,7 +35,7 @@ def build_engine(
         port=port,
         database=database,
     )
-    return create_async_engine(
+    engine = create_async_engine(
         url,
         pool_size=pool_size,
         max_overflow=max_overflow,
@@ -42,3 +43,7 @@ def build_engine(
         pool_pre_ping=True,
         pool_recycle=pool_recycle,
     )
+    # `db.statement` is captured sanitized (parameters are never recorded) --
+    # that's the instrumentation's own default behavior, not opt-in here.
+    SQLAlchemyInstrumentor().instrument(engine=engine.sync_engine)
+    return engine

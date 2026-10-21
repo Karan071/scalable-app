@@ -19,10 +19,12 @@ from typing import Any
 from uuid import UUID
 
 import aio_pika
+from opentelemetry import propagate, trace
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger("sf_messaging.consumer")
+_tracer = trace.get_tracer(__name__)
 
 DEFAULT_PREFETCH = 20
 
@@ -95,21 +97,36 @@ class InboxConsumer:
             event_type = envelope["type"]
             message_id = UUID(envelope["id"])
 
+            # Links this span back to the producer's request span (LLD-08
+            # §10) via whatever real traceparent build_envelope() captured
+            # at write time — empty/missing just starts a fresh root span.
+            carrier = {
+                "traceparent": envelope.get("traceparent") or "",
+                "tracestate": envelope.get("tracestate") or "",
+            }
+            parent_ctx = propagate.extract(carrier)
+
             handled_value: Any = None
             is_duplicate = False
-            async with self._session_factory() as session, session.begin():
-                result = await session.execute(
-                    self._insert_inbox_sql,
-                    {"consumer": self._consumer_name, "message_id": message_id},
-                )
-                if result.first() is None:
-                    is_duplicate = True
-                else:
-                    handler = self._handlers.get(event_type)
-                    if handler is not None:
-                        handled_value = await handler(session, envelope)
-                    # else: unhandled type (e.g. a wildcard-bound type this
-                    # consumer doesn't act on) — fall through, commit, ack.
+            with _tracer.start_as_current_span(
+                f"event.consume.{event_type}",
+                context=parent_ctx,
+                attributes={"messaging.consumer": self._consumer_name},
+            ):
+                async with self._session_factory() as session, session.begin():
+                    result = await session.execute(
+                        self._insert_inbox_sql,
+                        {"consumer": self._consumer_name, "message_id": message_id},
+                    )
+                    if result.first() is None:
+                        is_duplicate = True
+                    else:
+                        handler = self._handlers.get(event_type)
+                        if handler is not None:
+                            handled_value = await handler(session, envelope)
+                        # else: unhandled type (e.g. a wildcard-bound type
+                        # this consumer doesn't act on) — fall through,
+                        # commit, ack.
 
             await message.ack()
             if is_duplicate:

@@ -15,7 +15,10 @@ from dataclasses import dataclass
 
 import casbin
 from casbin_sqlalchemy_adapter import Adapter
+from opentelemetry import trace
 from sqlalchemy import Engine, create_engine, text
+
+_tracer = trace.get_tracer(__name__)
 
 #: Past this staleness, callers deny mutating/platform requests (LLD-02 §8).
 STALE_WARN_S = 60.0
@@ -104,7 +107,20 @@ class PolicyEnforcer:
         return await asyncio.to_thread(_fetch)
 
     def enforce(self, sub: str, dom: str, obj: str, act: str) -> bool:
-        return bool(self._require_snapshot().enforcer.enforce(sub, dom, obj, act))
+        # Manual span (LLD-10 §2): the ID attributes here aren't PII, and
+        # trace attributes (unlike metric labels) are allowed to carry IDs.
+        with _tracer.start_as_current_span(
+            "authz.enforce",
+            attributes={
+                "authz.subject": sub,
+                "authz.domain": dom,
+                "authz.resource": obj,
+                "authz.action": act,
+            },
+        ) as span:
+            allowed = bool(self._require_snapshot().enforcer.enforce(sub, dom, obj, act))
+            span.set_attribute("authz.allowed", allowed)
+            return allowed
 
     def permissions_for(self, subject: str, domain: str) -> list[str]:
         """UI-hint list of ``"<resource>:<action>"`` strings (LLD-02 §12) — never

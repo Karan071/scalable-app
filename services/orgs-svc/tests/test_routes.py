@@ -370,3 +370,30 @@ def test_internal_membership_lookup(client: TestClient) -> None:
     resp = client.get(f"/internal/v1/memberships/{membership_id}", params={"org_id": org["id"]})
     assert resp.status_code == 200
     assert resp.json()["status"] == "active"
+
+
+def test_my_memberships_includes_org_name_and_slug(client: TestClient) -> None:
+    creator = uuid4()
+    org = _create_org(client, creator)
+    _as_user(creator)
+
+    resp = client.get("/v1/me/memberships")
+
+    assert resp.status_code == 200
+    mine = next(m for m in resp.json() if m["org_id"] == org["id"])
+    assert mine["org_name"] == org["name"]
+    assert mine["org_slug"] == org["slug"]
+
+
+def test_list_members_does_not_populate_org_name(client: TestClient) -> None:
+    """Only the self-scoped /v1/me/memberships pays for the org join (plan
+    decision) — the admin-facing /v1/orgs/{id}/members reuse of the same
+    response model leaves it None, since the caller already knows the org."""
+    creator = uuid4()
+    org = _create_org(client, creator)
+    _as_user(creator)
+
+    resp = client.get(f"/v1/orgs/{org['id']}/members")
+
+    assert resp.status_code == 200
+    assert all(m["org_name"] is None for m in resp.json())

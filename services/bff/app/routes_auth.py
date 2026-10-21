@@ -1,11 +1,11 @@
-"""BFF auth routes (LLD-01 §4, §7, §8, §10).
+"""BFF auth routes (LLD-01 §4, §7, §8, §9, §10).
 
-Scoped to the login/session/logout critical path. Deferred (open items,
-tracked against LLD-01): step-up (§9), back-channel logout (§8, IdP-initiated),
-the token-refresh distributed lock (§6 — no `/api/*` proxy exists yet to need
-it), and rate limiting (LLD-09 §7).
+Scoped to the login/session/logout/step-up critical path. Deferred (open
+items, tracked against LLD-01): back-channel logout (§8, IdP-initiated) and
+rate limiting (LLD-09 §7).
 """
 
+import asyncio
 import hashlib
 import secrets
 import time
@@ -14,22 +14,13 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from starlette.responses import RedirectResponse
 
-from . import pending_login
+from . import pending_login, proxy
 from .csrf import derive_csrf_token, verify_csrf_token
 from .oidc import IdTokenInvalid, generate_pkce
+from .request_context import check_origin, cookie_names, require_session
+from .request_context import state as app_state
 
 router = APIRouter(prefix="/auth")
-
-
-def _state(request: Request):  # noqa: ANN202 - app.state is untyped by FastAPI
-    return request.app.state
-
-
-def _cookie_names(request: Request) -> tuple[str, str]:
-    """``__Host-`` requires Secure (browser-enforced), so it's only used when Secure is."""
-    if _state(request).settings.cookie_secure:
-        return "__Host-sf_session", "__Host-sf_auth"
-    return "sf_session", "sf_auth"
 
 
 def _validate_return_to(return_to: str, allowed_prefixes: list[str]) -> str:
@@ -40,31 +31,11 @@ def _validate_return_to(return_to: str, allowed_prefixes: list[str]) -> str:
     return return_to
 
 
-def _check_origin(request: Request) -> None:
-    app_origin = _state(request).settings.app_origin
-    origin = request.headers.get("origin") or request.headers.get("referer")
-    if origin is not None and not origin.rstrip("/").startswith(app_origin.rstrip("/")):
-        raise HTTPException(status_code=403, detail="origin mismatch")
-
-
-async def _require_session(request: Request):  # noqa: ANN202
-    s = _state(request)
-    session_cookie, _ = _cookie_names(request)
-    session_id = request.cookies.get(session_cookie)
-    if session_id is None:
-        raise HTTPException(status_code=401, detail="no session")
-    record = await s.sessions.load(session_id, idle_s=s.settings.session_idle_standard_s)
-    if record is None:
-        raise HTTPException(status_code=401, detail="session_expired")
-    return session_id, record
-
-
-@router.get("/login")
-async def login(request: Request, return_to: str = "/") -> Response:
-    s = _state(request)
+async def _start_login(request: Request, *, return_to: str, step_up: bool) -> Response:
+    s = app_state(request)
     return_to = _validate_return_to(return_to, s.settings.return_to_allowed_prefixes)
 
-    state = secrets.token_urlsafe(32)
+    oidc_state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
     pkce = generate_pkce()
     binding = secrets.token_urlsafe(32)
@@ -72,20 +43,24 @@ async def login(request: Request, return_to: str = "/") -> Response:
 
     await pending_login.store(
         s.redis,
-        state,
+        oidc_state,
         {
             "nonce": nonce,
             "verifier": pkce.verifier,
             "return_to": return_to,
             "binding_hash": binding_hash,
+            "step_up": step_up,
         },
     )
 
     authorize_url = s.oidc.build_authorize_url(
-        state=state, nonce=nonce, code_challenge=pkce.challenge
+        state=oidc_state,
+        nonce=nonce,
+        code_challenge=pkce.challenge,
+        acr_values="2" if step_up else None,
     )
 
-    _session_cookie, binding_cookie_name = _cookie_names(request)
+    _session_cookie, binding_cookie_name = cookie_names(request)
     response = RedirectResponse(authorize_url, status_code=302)
     response.set_cookie(
         binding_cookie_name,
@@ -99,6 +74,21 @@ async def login(request: Request, return_to: str = "/") -> Response:
     return response
 
 
+@router.get("/login")
+async def login(request: Request, return_to: str = "/") -> Response:
+    return await _start_login(request, return_to=return_to, step_up=False)
+
+
+@router.get("/step-up")
+async def step_up(request: Request, return_to: str = "/") -> Response:
+    """LLD-01 §9: ``prompt=login``/``acr_values=2`` re-authentication. The
+    binding cookie proves the same browser; the existing session (if any)
+    is rotated — not replaced — once the callback completes (see ``callback``
+    below), per §9 step 5's "rotates the session ID"."""
+    _, _ = await require_session(request)  # must already have a session to step up
+    return await _start_login(request, return_to=return_to, step_up=True)
+
+
 @router.get("/callback")
 async def callback(
     request: Request,
@@ -106,7 +96,7 @@ async def callback(
     state: str | None = None,
     error: str | None = None,
 ) -> Response:
-    s = _state(request)
+    s = app_state(request)
     if error or not code or not state:
         return RedirectResponse("/auth/error?code=idp_error", status_code=302)
 
@@ -114,7 +104,7 @@ async def callback(
     if pending is None:
         return RedirectResponse("/auth/error?code=state_invalid", status_code=302)
 
-    _session_cookie, binding_cookie_name = _cookie_names(request)
+    session_cookie_name, binding_cookie_name = cookie_names(request)
     binding_cookie = request.cookies.get(binding_cookie_name)
     if (
         binding_cookie is None
@@ -122,47 +112,78 @@ async def callback(
     ):
         return RedirectResponse("/auth/error?code=binding_invalid", status_code=302)
 
+    is_step_up = bool(pending.get("step_up"))
+    old_session_id: str | None = None
+    if is_step_up:
+        # The binding cookie proved the same browser; the pre-step-up
+        # session itself must still be present and valid to rotate from.
+        old_session_id = request.cookies.get(session_cookie_name)
+        if old_session_id is None:
+            return RedirectResponse("/auth/error?code=state_invalid", status_code=302)
+        old_record = await s.sessions.load(
+            old_session_id, idle_s=s.settings.session_idle_standard_s
+        )
+        if old_record is None:
+            return RedirectResponse("/auth/error?code=state_invalid", status_code=302)
+
     try:
         tokens = await s.oidc.exchange_code(code=code, code_verifier=pending["verifier"])
         principal = s.oidc.validate_id_token(str(tokens["id_token"]), nonce=pending["nonce"])
     except (IdTokenInvalid, httpx.HTTPStatusError):
         return RedirectResponse("/auth/error?code=idp_error", status_code=302)
 
-    provision = await s.users_client.provision(
-        idp_issuer=str(principal.claims["iss"]),
-        idp_subject=principal.subject,
-        email=str(principal.claim("email")),
-        email_verified=bool(principal.claim("email_verified")),
-    )
-    if provision.status != "active":
-        return RedirectResponse("/account-disabled", status_code=302)
+    if is_step_up:
+        acr = str(principal.claim("acr") or "1")
+        if int(acr) < 2:
+            # The IdP didn't actually step up (e.g. cancelled MFA prompt) —
+            # don't silently accept a session rotation with no acr gain.
+            return RedirectResponse("/auth/error?code=step_up_not_satisfied", status_code=302)
+        uid, sub, idp_sid = old_record.uid, old_record.sub, old_record.idp_sid
+    else:
+        provision = await s.users_client.provision(
+            idp_issuer=str(principal.claims["iss"]),
+            idp_subject=principal.subject,
+            email=str(principal.claim("email")),
+            email_verified=bool(principal.claim("email_verified")),
+        )
+        if provision.status != "active":
+            return RedirectResponse("/account-disabled", status_code=302)
 
-    if provision.needs_claim_refresh:
-        # First login: the id/access tokens predate users-svc setting `sf_uid`
-        # on the Keycloak user, so refresh to pick up the claim (LLD-01 §4).
-        tokens = await s.oidc.refresh(str(tokens["refresh_token"]))
-        principal = s.oidc.validate_id_token(str(tokens["id_token"]), nonce=None)
+        if provision.needs_claim_refresh:
+            # First login: the id/access tokens predate users-svc setting
+            # `sf_uid` on the Keycloak user, so refresh to pick it up (§4).
+            tokens = await s.oidc.refresh(str(tokens["refresh_token"]))
+            principal = s.oidc.validate_id_token(str(tokens["id_token"]), nonce=None)
+        uid = provision.user_id
+        sub = principal.subject
+        idp_sid = str(principal.claim("sid") or "")
 
     # The CSRF token is derived from `record.csrf` on demand by GET /auth/session,
     # not minted or returned here.
     session_id, _csrf_secret = await s.sessions.create(
-        uid=provision.user_id,
-        sub=principal.subject,
-        idp_sid=str(principal.claim("sid") or ""),
+        uid=uid,
+        sub=sub,
+        idp_sid=idp_sid,
         access_token=str(tokens["access_token"]),
         refresh_token=str(tokens["refresh_token"]),
         id_token=str(tokens["id_token"]),
         at_exp=int(time.time()) + int(tokens["expires_in"]),
         acr=str(principal.claim("acr") or "1"),
         auth_time=int(principal.claim("auth_time") or time.time()),
-        # Every session starts "standard": distinguishing "privileged" needs a
-        # role lookup, which needs authz-svc (E2.7, open item).
-        session_class="standard",
+        # Every session starts "standard" on a fresh login; step-up itself
+        # doesn't change session_class (that's a separate privileged-session
+        # concept, not reopened here — distinguishing it still needs a role
+        # lookup done elsewhere, same open item as before E2.10).
+        session_class="standard" if not is_step_up else old_record.session_class,
         idle_s=s.settings.session_idle_standard_s,
         abs_s=s.settings.session_abs_standard_s,
     )
 
-    session_cookie_name, binding_cookie_name = _cookie_names(request)
+    if old_session_id is not None:
+        # Rotate, not replace: delete the pre-step-up session only after the
+        # new one is durably written (LLD-01 §9 step 5).
+        await s.sessions.delete(old_session_id)
+
     response = RedirectResponse(pending["return_to"], status_code=302)
     response.set_cookie(
         session_cookie_name,
@@ -176,10 +197,64 @@ async def callback(
     return response
 
 
+async def _session_hints(request: Request, access_token: str) -> tuple[list[dict], list[str]]:
+    """``memberships[{org_id,name,roles[]}]``/``platform_roles[]`` (LLD-01
+    §10). Both are UI hints only ("Roles are for UI only" — the LLD's own
+    words); either downstream call failing degrades to an empty list rather
+    than failing the whole bootstrap."""
+    memberships_result, assignments_result = await asyncio.gather(
+        proxy.forward(
+            request,
+            service="orgs",
+            downstream_path="v1/me/memberships",
+            access_token=access_token,
+            method="GET",
+        ),
+        proxy.forward(
+            request,
+            service="authz",
+            downstream_path="v1/me/role-assignments",
+            access_token=access_token,
+            method="GET",
+        ),
+        return_exceptions=True,
+    )
+
+    memberships_raw: list[dict] = []
+    if (
+        isinstance(memberships_result, proxy.ForwardResult)
+        and memberships_result.status_code == 200
+    ):
+        parsed = proxy.body_as_content(memberships_result.body)
+        if isinstance(parsed, list):
+            memberships_raw = parsed
+
+    assignments: list[dict] = []
+    if (
+        isinstance(assignments_result, proxy.ForwardResult)
+        and assignments_result.status_code == 200
+    ):
+        parsed = proxy.body_as_content(assignments_result.body)
+        if isinstance(parsed, list):
+            assignments = parsed
+
+    platform_roles = [a["role_id"] for a in assignments if a.get("domain") == "platform"]
+    memberships = [
+        {
+            "org_id": m["org_id"],
+            "name": m.get("org_name"),
+            "roles": [a["role_id"] for a in assignments if a.get("domain") == f"org:{m['org_id']}"],
+        }
+        for m in memberships_raw
+        if m.get("status") == "active"
+    ]
+    return memberships, platform_roles
+
+
 @router.get("/session")
 async def session_info(request: Request) -> dict[str, object]:
-    s = _state(request)
-    session_cookie, _ = _cookie_names(request)
+    s = app_state(request)
+    session_cookie, _ = cookie_names(request)
     session_id = request.cookies.get(session_cookie)
     if session_id is None:
         return {"authenticated": False}
@@ -188,11 +263,21 @@ async def session_info(request: Request) -> dict[str, object]:
     if record is None:
         return {"authenticated": False}
 
-    me = await s.users_client.get_me(record.access_token)
+    try:
+        access_token = await proxy.ensure_fresh_access_token(s, session_id, record)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            return {"authenticated": False}
+        raise
+
+    me = await s.users_client.get_me(access_token)
+    memberships, platform_roles = await _session_hints(request, access_token)
     return {
         "authenticated": True,
         "user": {"id": me["id"], "handle": me["handle"], "display_name": me["display_name"]},
         "csrf_token": derive_csrf_token(record.csrf),
+        "memberships": memberships,
+        "platform_roles": platform_roles,
         "acr": record.acr,
         "session_class": record.session_class,
     }
@@ -200,9 +285,9 @@ async def session_info(request: Request) -> dict[str, object]:
 
 @router.post("/logout")
 async def logout(request: Request) -> Response:
-    _check_origin(request)
-    s = _state(request)
-    session_id, record = await _require_session(request)
+    check_origin(request)
+    s = app_state(request)
+    session_id, record = await require_session(request)
 
     if not verify_csrf_token(record.csrf, request.headers.get("x-csrf-token", "")):
         raise HTTPException(status_code=403, detail="csrf")
@@ -212,7 +297,7 @@ async def logout(request: Request) -> Response:
     logout_url = s.oidc.end_session_url(
         id_token=record.id_token, post_logout_redirect_uri=s.settings.app_origin
     )
-    session_cookie, _ = _cookie_names(request)
+    session_cookie, _ = cookie_names(request)
     response = RedirectResponse(logout_url, status_code=303)
     response.delete_cookie(session_cookie, path="/")
     return response
@@ -220,9 +305,9 @@ async def logout(request: Request) -> Response:
 
 @router.post("/logout-all")
 async def logout_all(request: Request) -> dict[str, object]:
-    _check_origin(request)
-    s = _state(request)
-    _session_id, record = await _require_session(request)
+    check_origin(request)
+    s = app_state(request)
+    _session_id, record = await require_session(request)
 
     if not verify_csrf_token(record.csrf, request.headers.get("x-csrf-token", "")):
         raise HTTPException(status_code=403, detail="csrf")

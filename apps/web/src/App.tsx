@@ -1,11 +1,16 @@
-import { Button } from '@/components/ui/button'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { RouterProvider } from 'react-router-dom'
+
+import { createQueryClient } from '@/lib/query-client'
+import { router } from '@/routes/router'
+
+const queryClient = createQueryClient()
 
 function App() {
   return (
-    <>
-      <h1>Vite + React</h1>
-      <Button>Click me</Button>
-    </>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
   )
 }
 

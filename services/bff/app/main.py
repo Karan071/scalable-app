@@ -6,9 +6,19 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from redis.asyncio import Redis
-from sf_common import TokenCipher, build_health_router, configure_logging, install_problem_details
+from sf_common import (
+    CorrelationIdMiddleware,
+    TokenCipher,
+    build_health_router,
+    configure_logging,
+    init_telemetry,
+    install_problem_details,
+    instrument_fastapi_app,
+)
 
 from .oidc import OidcClient, discover
+from .proxy import ConcurrencyGate
+from .proxy import router as api_router
 from .routes_auth import router as auth_router
 from .sessions import SessionStore
 from .settings import Settings
@@ -16,6 +26,7 @@ from .users_client import ServiceTokenSource, UsersClient
 
 settings = Settings()
 configure_logging(settings)
+init_telemetry(settings)
 
 
 @asynccontextmanager
@@ -50,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.users_client = UsersClient(
         http_client, base_url=settings.users_svc_base_url, token_source=token_source
     )
+    app.state.api_proxy_gate = ConcurrencyGate(settings.api_proxy_max_concurrency)
 
     yield
 
@@ -66,6 +78,9 @@ async def _redis_ready() -> bool:
 
 
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
 install_problem_details(app)
 app.include_router(build_health_router(readiness_checks=[_redis_ready]))
 app.include_router(auth_router)
+app.include_router(api_router)
+instrument_fastapi_app(app)

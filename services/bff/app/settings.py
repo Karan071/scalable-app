@@ -22,6 +22,11 @@ class Settings(BaseServiceSettings):
     svc_bff_client_id: str = "sf-svc-bff"
     svc_bff_client_secret: str
     users_svc_base_url: str
+    orgs_svc_base_url: str
+    authz_svc_base_url: str
+
+    # /api/** load-shedding cap (LLD-01 §6 step 1).
+    api_proxy_max_concurrency: int = 100
 
     redis_session_url: str = "redis://localhost:6379/0"
 

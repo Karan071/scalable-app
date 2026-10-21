@@ -309,3 +309,18 @@ async def my_permissions(
     subject = principal.casbin_subject()
     permissions = enforcer.permissions_for(subject, domain)
     return PermissionsResponse(domain=domain, permissions=permissions)
+
+
+@router.get("/v1/me/role-assignments", response_model=list[RoleAssignmentResponse])
+async def my_role_assignments(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_authenticated_user),
+) -> list[RoleAssignmentResponse]:
+    """Self-scoped, every domain at once (E2.10): backs the BFF's session
+    bootstrap (``memberships[].roles[]``/``platform_roles[]``). No
+    ``Authorize(...)`` beyond authentication — reading your own grants
+    isn't a privilege question."""
+    assignments = await repository.list_active_role_assignments_for_user(
+        session, _sf_uid(principal)
+    )
+    return [_assignment_out(a) for a in assignments]

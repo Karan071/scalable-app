@@ -1,16 +1,24 @@
-"""users-svc HTTP routes (LLD-01 §11.3)."""
+"""users-svc HTTP routes (LLD-01 §11.3).
+
+Platform-admin routes (``/v1/platform/users*``) land in E2.10: Casbin
+``platform_user:{read,manage}`` (via ``Authorize(..., domain="platform")``)
+plus BFF step-up (acr>=2, floored automatically for any platform-domain
+route by ``Authorize``'s own ``min_acr`` logic) were the two prerequisites
+named in ``service.py``'s old docstring, and both now exist (E2.7, E2.4).
+"""
 
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
-from sf_authz import AuthenticatedUser, Internal, Principal
+from pydantic import BaseModel, Field
+from sf_authz import AuthenticatedUser, Authorize, Internal, Principal
 from sf_db import transaction
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import repository, service
 from .db import get_session
+from .models import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -20,6 +28,8 @@ logger = logging.getLogger(__name__)
 require_provision_scope = Internal("users:provision")
 require_read_scope = Internal("users:read")
 require_authenticated_user = AuthenticatedUser()
+require_read_platform_user = Authorize("platform_user", "read", domain="platform")
+require_manage_platform_user = Authorize("platform_user", "manage", domain="platform")
 
 
 def _sf_uid(principal: Principal) -> UUID:
@@ -172,3 +182,66 @@ async def batch(
         BatchUser(id=u.id, status=u.status, display_name=u.display_name, handle=u.handle)
         for u in users
     ]
+
+
+class PlatformUserResponse(BaseModel):
+    id: UUID
+    handle: str | None
+    display_name: str | None
+    email: str
+    status: str
+    version: int
+
+
+def _platform_user_out(u: User) -> PlatformUserResponse:
+    return PlatformUserResponse(
+        id=u.id,
+        handle=u.handle,
+        display_name=u.display_name,
+        email=u.email,
+        status=u.status,
+        version=u.version,
+    )
+
+
+@router.get("/v1/platform/users", response_model=list[PlatformUserResponse])
+async def list_platform_users(
+    search: str | None = Query(default=None, max_length=100),
+    cursor: UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_read_platform_user),
+) -> list[PlatformUserResponse]:
+    users = await repository.list_users(session, search=search, cursor_id=cursor, limit=limit)
+    return [_platform_user_out(u) for u in users]
+
+
+class PlatformDisableUserRequest(BaseModel):
+    reason: str = Field(min_length=10, max_length=200)
+
+
+@router.post("/v1/platform/users/{user_id}:disable", response_model=None)
+async def disable_platform_user(
+    user_id: UUID,
+    body: PlatformDisableUserRequest,
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_manage_platform_user),
+) -> dict[str, str]:
+    try:
+        await service.disable_user(session, user_id, reason=body.reason)
+    except service.UserNotFoundOrAlreadyInState as exc:
+        raise HTTPException(status_code=404) from exc
+    return {"status": "disabled"}
+
+
+@router.post("/v1/platform/users/{user_id}:reactivate", response_model=None)
+async def reactivate_platform_user(
+    user_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_manage_platform_user),
+) -> dict[str, str]:
+    try:
+        await service.reactivate_user(session, user_id)
+    except service.UserNotFoundOrAlreadyInState as exc:
+        raise HTTPException(status_code=404) from exc
+    return {"status": "active"}

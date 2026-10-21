@@ -17,10 +17,12 @@ from typing import Any
 
 import aio_pika
 import asyncpg
+from opentelemetry import trace
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger("sf_messaging.relay")
+_tracer = trace.get_tracer(__name__)
 
 #: Table/channel names are interpolated into raw SQL (can't be bind params),
 #: so they're restricted the same way outbox.py restricts NOTIFY channels —
@@ -163,26 +165,35 @@ class OutboxRelay:
                 await asyncio.sleep(1.0)
 
     async def _drain_once(self) -> None:
-        async with self._session_factory() as session, session.begin():
-            rows = (
-                (await session.execute(self._claim_sql, {"batch_size": self._batch_size}))
-                .mappings()
-                .all()
-            )
-            if not rows:
-                return
+        # One span per batch tick, not per row (LLD-10 §2) -- each row's own
+        # publish already carries its own producer-side trace context
+        # forward via the AMQP headers in _publish_one, independent of this
+        # relay-tick span, which is purely an operational (not business) one.
+        with _tracer.start_as_current_span(
+            "outbox.relay.batch", attributes={"service.name": self._service_name}
+        ) as span:
+            async with self._session_factory() as session, session.begin():
+                rows = (
+                    (await session.execute(self._claim_sql, {"batch_size": self._batch_size}))
+                    .mappings()
+                    .all()
+                )
+                span.set_attribute("outbox.batch_size", len(rows))
+                if not rows:
+                    return
 
-            confirmed_ids: list[Any] = []
-            for row in rows:
-                error = await self._publish_one(row)
-                if error is None:
-                    confirmed_ids.append(row["id"])
-                else:
-                    await session.execute(
-                        self._mark_failed_sql, {"id": row["id"], "error": error[:500]}
-                    )
-            if confirmed_ids:
-                await session.execute(self._mark_published_sql, {"ids": confirmed_ids})
+                confirmed_ids: list[Any] = []
+                for row in rows:
+                    error = await self._publish_one(row)
+                    if error is None:
+                        confirmed_ids.append(row["id"])
+                    else:
+                        await session.execute(
+                            self._mark_failed_sql, {"id": row["id"], "error": error[:500]}
+                        )
+                if confirmed_ids:
+                    await session.execute(self._mark_published_sql, {"ids": confirmed_ids})
+                span.set_attribute("outbox.confirmed", len(confirmed_ids))
 
     async def _publish_one(self, row: Any) -> str | None:
         """Returns None on success, else an error string (row stays unpublished)."""

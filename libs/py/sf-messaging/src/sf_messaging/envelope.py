@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid7
 
+from opentelemetry import propagate
+
 
 def build_envelope(
     *,
@@ -20,7 +22,17 @@ def build_envelope(
     traceparent: str | None = None,
     tracestate: str | None = None,
 ) -> dict[str, Any]:
-    """Build one envelope. ``id`` doubles as the outbox row id and AMQP ``message_id``."""
+    """Build one envelope. ``id`` doubles as the outbox row id and AMQP
+    ``message_id``. When the caller doesn't pass ``traceparent`` explicitly,
+    it's captured from whatever span is active at call time (LLD-08 §10) --
+    normally the HTTP request handler that's writing this outbox row -- so
+    the eventual consumer's span links back to the request that caused it."""
+    if traceparent is None:
+        carrier: dict[str, str] = {}
+        propagate.inject(carrier)
+        traceparent = carrier.get("traceparent")
+        tracestate = carrier.get("tracestate", tracestate)
+
     event_id = uuid7()
     occurred_at = datetime.now(UTC)
     return {

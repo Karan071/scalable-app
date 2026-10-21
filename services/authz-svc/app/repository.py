@@ -90,6 +90,22 @@ async def list_role_assignments(
     return list((await session.execute(stmt.order_by(RoleAssignment.granted_at))).scalars().all())
 
 
+async def list_active_role_assignments_for_user(
+    session: AsyncSession, user_id: UUID
+) -> list[RoleAssignment]:
+    """Every domain (org:* and platform) at once — backs the self-scoped
+    ``GET /v1/me/role-assignments`` (E2.10), used for session-bootstrap's
+    ``memberships[].roles[]``/``platform_roles[]``. No domain filter, so no
+    ``Authorize(...)`` beyond authentication: reading your own grants isn't
+    a privilege question."""
+    stmt = (
+        select(RoleAssignment)
+        .where(RoleAssignment.user_id == user_id, RoleAssignment.status == "active")
+        .order_by(RoleAssignment.granted_at)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
 async def update_role_assignment_status(
     session: AsyncSession,
     assignment_id: UUID,

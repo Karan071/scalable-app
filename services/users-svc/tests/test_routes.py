@@ -153,3 +153,63 @@ def test_batch_returns_only_requested_ids(client: TestClient) -> None:
     returned_ids = {row["id"] for row in response.json()}
     assert returned_ids == {first["user_id"]}
     assert second["user_id"] not in returned_ids
+
+
+def _as_platform_admin(client: TestClient) -> None:
+    from app.main import app
+    from app.routes import require_manage_platform_user, require_read_platform_user
+
+    principal = Principal(
+        subject=f"user:{uuid7()}", audiences=("scaleforge-api",), claims={"acr": 2}
+    )
+    app.dependency_overrides[require_read_platform_user] = lambda: principal
+    app.dependency_overrides[require_manage_platform_user] = lambda: principal
+
+
+def test_list_platform_users_finds_by_search(client: TestClient) -> None:
+    body = _unique_identity()
+    provisioned = client.post("/internal/v1/users:provision", json=body).json()
+    _as_platform_admin(client)
+
+    response = client.get("/v1/platform/users", params={"search": str(body["email"]).split("@")[0]})
+
+    assert response.status_code == 200
+    ids = {row["id"] for row in response.json()}
+    assert provisioned["user_id"] in ids
+
+
+def test_disable_then_reactivate_platform_user(client: TestClient) -> None:
+    provisioned = client.post("/internal/v1/users:provision", json=_unique_identity()).json()
+    _as_platform_admin(client)
+
+    disable_resp = client.post(
+        f"/v1/platform/users/{provisioned['user_id']}:disable",
+        json={"reason": "fraud investigation"},
+    )
+    assert disable_resp.status_code == 200, disable_resp.text
+    assert disable_resp.json() == {"status": "disabled"}
+
+    reactivate_resp = client.post(f"/v1/platform/users/{provisioned['user_id']}:reactivate")
+    assert reactivate_resp.status_code == 200, reactivate_resp.text
+    assert reactivate_resp.json() == {"status": "active"}
+
+
+def test_disable_platform_user_requires_reason(client: TestClient) -> None:
+    provisioned = client.post("/internal/v1/users:provision", json=_unique_identity()).json()
+    _as_platform_admin(client)
+
+    response = client.post(
+        f"/v1/platform/users/{provisioned['user_id']}:disable", json={"reason": "short"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_disable_platform_user_404_for_unknown_user(client: TestClient) -> None:
+    _as_platform_admin(client)
+
+    response = client.post(
+        f"/v1/platform/users/{uuid7()}:disable", json={"reason": "fraud investigation"}
+    )
+
+    assert response.status_code == 404
