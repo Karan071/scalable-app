@@ -185,12 +185,23 @@ services:
           -H 'content-type: application/json' \
           -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.authz.identity.dlq"}}'
 
-        # Bindings (LLD-08 §2.1).
+        # Bindings for q.authz.identity (LLD-08 §2.1).
         for key in "membership.*.v1" "organization.*.v1" "user.created.v1" "user.disabled.v1" "user.reactivated.v1"; do
           curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.authz.identity" \
             -H 'content-type: application/json' \
             -d "{\"routing_key\":\"$$key\"}"
         done
+
+        # q.audit.ingest (E2.9): audit-svc consumes audit.recorded.v1 events.
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.audit.ingest.dlq" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.audit.ingest" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.audit.ingest.dlq"}}'
+        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.audit.ingest" \
+          -H 'content-type: application/json' \
+          -d '{"routing_key":"audit.recorded.v1"}'
     restart: "no"
 
   mailpit:

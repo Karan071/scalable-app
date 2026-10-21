@@ -1446,15 +1446,25 @@ name = "scaleforge-audit-svc"
 version = "0.1.0"
 source = { editable = "services/audit-svc" }
 dependencies = [
+    { name = "alembic" },
     { name = "fastapi" },
+    { name = "redis" },
+    { name = "sf-authz" },
     { name = "sf-common" },
+    { name = "sf-db" },
+    { name = "sf-messaging" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.13" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "redis", specifier = ">=5.0" },
+    { name = "sf-authz", editable = "libs/py/sf-authz" },
     { name = "sf-common", editable = "libs/py/sf-common" },
+    { name = "sf-db", editable = "libs/py/sf-db" },
+    { name = "sf-messaging", editable = "libs/py/sf-messaging" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
