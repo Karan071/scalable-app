@@ -1,0 +1,48 @@
+# Messaging recording rules and alerts (LLD-08 §11, §13; LLD-10 §9).
+# Unit tests: messaging.test.yml (`make test-alerts`).
+groups:
+  # One group, recording rules first: rules within a group evaluate in
+  # order, so the DLQ alerts read this cycle's dlq_depth. In separate
+  # groups they read the previous cycle's and fire one interval late
+  # (caught by messaging.test.yml).
+  - name: messaging
+    rules:
+      # LLD-08 §13's queue_depth/dlq_depth, from the RabbitMQ Prometheus
+      # plugin's per-queue metric (scraped from /metrics/detailed).
+      - record: queue_depth
+        expr: sum by (queue) (rabbitmq_detailed_queue_messages{queue!~".+\\.dlq"})
+      - record: dlq_depth
+        expr: sum by (queue) (rabbitmq_detailed_queue_messages{queue=~".+\\.dlq"})
+
+      - alert: OutboxLag
+        # Every replica reports its own series; one alert per service.
+        expr: max by (service) (outbox_oldest_unpublished_age_seconds) > 60
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }}: oldest unpublished outbox row is {{ $value | humanizeDuration }} old"
+          description: >-
+            The relay is not getting rows to the broker. Downstream consumers
+            (authz projections, audit, session revocation) are going stale.
+          runbook_url: docs/runbooks/outbox-lag.md
+
+      - alert: DLQNotEmpty
+        expr: dlq_depth{queue!="q.audit.ingest.dlq"} > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.queue }} holds {{ $value }} dead-lettered message(s)"
+          runbook_url: docs/runbooks/dlq-not-empty.md
+
+      - alert: AuditDLQNotEmpty
+        # LLD-04 §2.3: an audit DLQ alert is high priority -- every message
+        # there is an audit record that was never stored.
+        expr: dlq_depth{queue="q.audit.ingest.dlq"} > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $value }} audit event(s) dead-lettered: not in the audit trail"
+          runbook_url: docs/runbooks/dlq-not-empty.md

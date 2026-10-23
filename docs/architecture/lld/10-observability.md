@@ -172,7 +172,7 @@ M2–M5 (Compose) use a single Collector container exporting to Jaeger all-in-on
 | Telemetry loss | Export failures > 1% for 15 m | ticket |
 | Certificate expiry | < 14 days | ticket |
 
-Every alert links a runbook in `docs/runbooks/<alert>.md` (planned).
+Every alert links a runbook in `docs/runbooks/<alert>.md`. Implemented so far (Compose, M2): **Outbox lag** and **DLQ not empty**, in `deploy/compose/prometheus/rules/messaging.yml` with promtool tests (`make test-alerts`). `queue_depth`/`dlq_depth` are recording rules over the RabbitMQ plugin's `rabbitmq_detailed_queue_messages`. No Alertmanager yet: alerts are visible at Prometheus `/alerts`; routing by `severity` (page/ticket) lands with E6.3.
 
 ## 10. SLOs and error budgets (PRD §7.4, provisional)
 

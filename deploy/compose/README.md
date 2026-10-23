@@ -151,6 +151,10 @@ traces to Jaeger and serves metrics for Prometheus to scrape.
 | Traces | Jaeger UI <http://localhost:16686> | Services appear in the Service dropdown once they've handled a request |
 | Metrics | Prometheus <http://localhost:9090> | Query `outbox_oldest_unpublished_age_seconds` (LLD-08 §11 alerts above 60) |
 
+Alerts (LLD-10 §9) are evaluated by Prometheus. See them at
+<http://localhost:9090/alerts>; each one links its runbook in `docs/runbooks/`.
+After editing `prometheus/rules/messaging.yml`, run `make test-alerts`.
+
 Metrics export every 60 s by default. Set `OTEL_METRIC_EXPORT_INTERVAL=5000`
 on a service to see them sooner. Series carry `job="scaleforge/<service>"`.
 

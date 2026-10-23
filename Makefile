@@ -1,4 +1,4 @@
-.PHONY: sync fmt lint typecheck test dev dev-down dev-logs
+.PHONY: sync fmt lint typecheck test test-alerts dev dev-down dev-logs
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml --env-file .env
 
@@ -34,6 +34,12 @@ test: ## Run the Python test suite across the workspace, one service at a time.
 		echo "== test $$d =="; \
 		PYTHONPATH="$$(pwd)/$$d" uv run pytest "$${d}tests" -q || exit 1; \
 	done
+
+test-alerts: ## Check Prometheus rules and run their promtool unit tests (LLD-10 §14).
+	docker run --rm --entrypoint promtool -v "$$(pwd)/deploy/compose/prometheus/rules:/rules:ro" \
+		-w /rules prom/prometheus:v3.1.0 check rules messaging.yml
+	docker run --rm --entrypoint promtool -v "$$(pwd)/deploy/compose/prometheus/rules:/rules:ro" \
+		-w /rules prom/prometheus:v3.1.0 test rules messaging.test.yml
 
 dev: ## Bring up local infra: Postgres, Redis, Keycloak, RabbitMQ, Mailpit, Jaeger.
 	test -f .env || (echo "Missing .env — copy .env.example first" && exit 1)

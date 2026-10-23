@@ -301,8 +301,10 @@ services:
     image: prom/prometheus:v3.1.0
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
     depends_on:
       - otel-collector
+      - rabbitmq
     ports:
       - "9090:9090" # UI + API
 

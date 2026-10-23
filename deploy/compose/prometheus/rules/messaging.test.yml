@@ -1,0 +1,87 @@
+# promtool test rules (LLD-10 §14). Run: make test-alerts
+rule_files:
+  - messaging.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Outbox lag: two orgs-svc replicas (one stuck, one not) and a healthy
+  # users-svc. The stuck replica crosses 60 s at 2m, so the 5m `for` fires
+  # it at 7m -- once, for the service, not per replica.
+  - interval: 1m
+    input_series:
+      - series: 'outbox_oldest_unpublished_age_seconds{service="orgs-svc", instance="a"}'
+        values: "0+60x10"
+      - series: 'outbox_oldest_unpublished_age_seconds{service="orgs-svc", instance="b"}'
+        values: "0x10"
+      - series: 'outbox_oldest_unpublished_age_seconds{service="users-svc", instance="c"}'
+        values: "5x10"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OutboxLag
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: OutboxLag
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: orgs-svc
+            exp_annotations:
+              summary: "orgs-svc: oldest unpublished outbox row is 7m 0s old"
+              description: >-
+                The relay is not getting rows to the broker. Downstream consumers
+                (authz projections, audit, session revocation) are going stale.
+              runbook_url: docs/runbooks/outbox-lag.md
+
+  # Queue/DLQ depth: recording rules split queues from DLQs; the audit DLQ
+  # pages after 1m, every other DLQ tickets after 10m, an empty DLQ never.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages{vhost="/", queue="q.users.commands"}'
+        values: "3x15"
+      - series: 'rabbitmq_detailed_queue_messages{vhost="/", queue="q.users.commands.dlq"}'
+        values: "2x15"
+      - series: 'rabbitmq_detailed_queue_messages{vhost="/", queue="q.authz.identity.dlq"}'
+        values: "0x15"
+      - series: 'rabbitmq_detailed_queue_messages{vhost="/", queue="q.audit.ingest.dlq"}'
+        values: "0 0 1x13"
+    promql_expr_test:
+      - expr: queue_depth
+        eval_time: 1m
+        exp_samples:
+          - labels: 'queue_depth{queue="q.users.commands"}'
+            value: 3
+      - expr: dlq_depth
+        eval_time: 1m
+        exp_samples:
+          - labels: 'dlq_depth{queue="q.users.commands.dlq"}'
+            value: 2
+          - labels: 'dlq_depth{queue="q.authz.identity.dlq"}'
+            value: 0
+          - labels: 'dlq_depth{queue="q.audit.ingest.dlq"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DLQNotEmpty
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DLQNotEmpty
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              queue: q.users.commands.dlq
+            exp_annotations:
+              summary: "q.users.commands.dlq holds 2 dead-lettered message(s)"
+              runbook_url: docs/runbooks/dlq-not-empty.md
+      - eval_time: 2m
+        alertname: AuditDLQNotEmpty
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: AuditDLQNotEmpty
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              queue: q.audit.ingest.dlq
+            exp_annotations:
+              summary: "1 audit event(s) dead-lettered: not in the audit trail"
+              runbook_url: docs/runbooks/dlq-not-empty.md
