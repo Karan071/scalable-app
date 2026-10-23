@@ -77,12 +77,24 @@ async def emit_role_changed(
     )
 
 
-async def emit_mfa_group_sync(session: AsyncSession, assignment: RoleAssignment) -> None:
+async def emit_mfa_group_sync(
+    session: AsyncSession, assignment: RoleAssignment, *, required: bool
+) -> None:
     """A command (LLD-08 §4.2), not an event -- goes to ``sf.commands``, not
     ``sf.events`` like every other ``emit*`` in this module. Getting this
     wrong means the message is unroutable (no ``sf.events`` binding matches
     this routing key) and the outbox row never leaves ``published_at IS
-    NULL`` (confirmed: this was the bug before this comment existed)."""
+    NULL`` (confirmed: this was the bug before this comment existed).
+
+    ``required`` carries the desired end state (in the group / out of it),
+    computed by the caller at emit time -- not just "add", despite LLD-01
+    §9's accepted text only describing the grant/add direction. Without a
+    ``required=False`` case, a user whose last ``requires_mfa`` role is
+    revoked would stay in Keycloak's ``mfa-required`` group forever (LLD-01
+    §9 itself notes the group is a UX nudge, not the security boundary --
+    ``acr`` is re-checked at enforcement time regardless -- but leaving a
+    de-privileged user permanently forced through MFA setup is still worth
+    fixing)."""
     await emit(
         session,
         event_type="identity.mfa_group_sync_requested",
@@ -91,5 +103,5 @@ async def emit_mfa_group_sync(session: AsyncSession, assignment: RoleAssignment)
         aggregate_type="role_assignment",
         aggregate_id=assignment.id,
         aggregate_version=assignment.version,
-        data={"user_id": str(assignment.user_id)},
+        data={"user_id": str(assignment.user_id), "required": required},
     )

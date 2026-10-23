@@ -55,7 +55,7 @@ async def test_emit_mfa_group_sync_uses_the_commands_exchange(
             granted_by=user_id,
             reason=None,
         )
-        await emit_mfa_group_sync(session, assignment)
+        await emit_mfa_group_sync(session, assignment, required=True)
 
         row = (
             (
@@ -75,3 +75,4 @@ async def test_emit_mfa_group_sync_uses_the_commands_exchange(
     assert row["exchange"] == "sf.commands"
     assert row["routing_key"] == "identity.mfa_group_sync_requested.v1"
     assert row["payload"]["data"]["user_id"] == str(user_id)
+    assert row["payload"]["data"]["required"] is True

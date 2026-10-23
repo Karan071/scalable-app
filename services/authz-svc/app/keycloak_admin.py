@@ -76,15 +76,26 @@ class KeycloakAdminClient:
 
     async def add_user_to_group(self, *, keycloak_user_id: str, group_name: str) -> None:
         """Idempotent (LLD-08 §6): Keycloak's join-group PUT is a no-op if
-        the user is already a member. There is no corresponding remove,
-        since nothing emits this command on role revocation yet (a
-        separate, open item -- see events.py's docstring)."""
+        the user is already a member."""
         token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"}
         group_id = await self._get_group_id(group_name, headers=headers)
         url = f"{self._admin_base_url}/users/{keycloak_user_id}/groups/{group_id}"
         put_resp = await self._http.put(url, headers=headers)
         put_resp.raise_for_status()
+
+    async def remove_user_from_group(self, *, keycloak_user_id: str, group_name: str) -> None:
+        """Idempotent: Keycloak's leave-group DELETE is a no-op if the user
+        isn't a member. Used when a user's last ``requires_mfa`` role is
+        revoked (LLD-01 §9's accepted text only describes the add
+        direction; see ``events.py``'s ``emit_mfa_group_sync`` docstring
+        for why the remove direction was added too)."""
+        token = await self._get_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        group_id = await self._get_group_id(group_name, headers=headers)
+        url = f"{self._admin_base_url}/users/{keycloak_user_id}/groups/{group_id}"
+        delete_resp = await self._http.delete(url, headers=headers)
+        delete_resp.raise_for_status()
 
     async def _get_group_id(self, group_name: str, *, headers: dict[str, str]) -> str:
         if group_name in self._group_id_cache:

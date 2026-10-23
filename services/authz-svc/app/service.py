@@ -132,7 +132,7 @@ async def assign_role(
     new_version = await repository.bump_policy_version(session)
     await emit_role_changed(session, assignment, actor_id=actor_id, change="granted")
     if role.requires_mfa:
-        await emit_mfa_group_sync(session, assignment)
+        await emit_mfa_group_sync(session, assignment, required=True)
     return AssignResult(assignment=assignment, policy_version=new_version)
 
 
@@ -187,7 +187,7 @@ async def assign_platform_role(
     new_version = await repository.bump_policy_version(session)
     await emit_role_changed(session, assignment, actor_id=actor_id, change="granted")
     if role.requires_mfa:
-        await emit_mfa_group_sync(session, assignment)
+        await emit_mfa_group_sync(session, assignment, required=True)
     return AssignResult(assignment=assignment, policy_version=new_version)
 
 
@@ -239,4 +239,11 @@ async def revoke_role(
     new_version = await repository.bump_policy_version(session)
     change = "revoked" if not is_self_revoke else "self_revoked"
     await emit_role_changed(session, updated, actor_id=actor_id, change=change)
+
+    role = await repository.get_role(session, updated.role_id)
+    if role is not None and role.requires_mfa:
+        still_required = await repository.has_active_mfa_role(session, user_id=updated.user_id)
+        if not still_required:
+            await emit_mfa_group_sync(session, updated, required=False)
+
     return AssignResult(assignment=updated, policy_version=new_version)

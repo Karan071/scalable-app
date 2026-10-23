@@ -24,6 +24,17 @@ enforcer until an unrelated policy change happens to bump the version
 elsewhere, or the process restarts. So ``organization.reactivated`` bumps
 and returns the version too, same as every other domain_status-changing
 transition.
+
+``handle_user_disabled`` below has the same ``emit_mfa_group_sync`` fix
+``service.py``'s ``revoke_role`` got: suspending every assignment can take
+away a ``requires_mfa`` role (``super_user``/``platform_operator``), so it
+emits ``required=False`` when one of the suspended rows needed it.
+``handle_membership_disabled``/``.reactivated``/``.revoked`` do not, and
+deliberately so, not as an open item: every ``requires_mfa`` role in the
+current seed data is platform-scoped (5830e6a07042), and membership
+events only ever touch org-scoped role assignments, so there is no
+``requires_mfa`` row for these three to lose or regain. Add the same
+check here only if an org-scoped role ever gets ``requires_mfa``.
 """
 
 from uuid import UUID
@@ -31,7 +42,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import repository
-from .events import emit_role_changed
+from .events import emit_mfa_group_sync, emit_role_changed
 
 CONSUMER_NAME = "authz.identity"
 
@@ -226,7 +237,15 @@ async def handle_user_created(session: AsyncSession, envelope: dict) -> int | No
 
 
 async def handle_user_disabled(session: AsyncSession, envelope: dict) -> int | None:
-    """LLD-02 §9: "All assignments -> suspended (reason user_disabled)." """
+    """LLD-02 §9: "All assignments -> suspended (reason user_disabled)."
+
+    Also an extension beyond that literal wording, same as ``revoke_role``
+    (see events.py's ``emit_mfa_group_sync`` docstring): if one of the
+    suspended rows was a ``requires_mfa`` role, the user comes out of
+    Keycloak's ``mfa-required`` group too -- this suspends *every* active
+    assignment, so there is never another active ``requires_mfa`` row left
+    to check against, unlike ``revoke_role``'s single-assignment case.
+    """
     data = envelope["data"]
     user_id = UUID(data["user_id"])
     actor_id = UUID(data.get("actor_id") or data["user_id"])
@@ -234,11 +253,19 @@ async def handle_user_disabled(session: AsyncSession, envelope: dict) -> int | N
     suspended = await repository.suspend_all_role_assignments_for_user(
         session, user_id=user_id, reason="user_disabled"
     )
+    lost_mfa_assignment = None
     for assignment in suspended:
         await repository.delete_casbin_g_row(
             session, user_id=user_id, role_id=assignment.role_id, domain=assignment.domain
         )
         await emit_role_changed(session, assignment, actor_id=actor_id, change="suspended")
+        if lost_mfa_assignment is None:
+            role = await repository.get_role(session, assignment.role_id)
+            if role is not None and role.requires_mfa:
+                lost_mfa_assignment = assignment
+
+    if lost_mfa_assignment is not None:
+        await emit_mfa_group_sync(session, lost_mfa_assignment, required=False)
 
     return await _bump_and_return_version_if(session, bool(suspended))
 

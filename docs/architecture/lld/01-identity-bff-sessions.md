@@ -249,7 +249,7 @@ The revocation effect is immediate on the next request after the key is deleted.
 
 ## 9. MFA and step-up (FR-AUTH-05, SEC-15)
 
-- **Enforced MFA:** granting any platform role or `org_admin` adds the user to the Keycloak group `mfa-required` (authz-svc → Keycloak admin API, from the outbox, idempotent).
+- **Enforced MFA:** granting any platform role or `org_admin` adds the user to the Keycloak group `mfa-required` (authz-svc → Keycloak admin API, from the outbox, idempotent). Symmetrically, revoking a user's last `requires_mfa` role removes them from the group (implementation extension beyond this bullet's original wording, which only covered the add direction — added so a de-privileged user isn't forced through MFA setup indefinitely).
   - Until the user has enrolled, the next login forces a required action (configure OTP/WebAuthn).
   - Privileged permissions additionally require `acr ≥ 2` at enforcement time (LLD-02 §6). This keeps the gap safe if the group sync lags.
 - **Step-up:**

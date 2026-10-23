@@ -175,6 +175,26 @@ async def count_active_assignments_for_role(session: AsyncSession, role_id: str)
     return (await session.execute(count_stmt)).scalar_one()
 
 
+async def has_active_mfa_role(session: AsyncSession, *, user_id: UUID) -> bool:
+    """True if the user holds any active role with ``requires_mfa`` (any
+    domain). Used after a revoke to decide whether they should also come
+    out of Keycloak's ``mfa-required`` group (LLD-01 §9) -- called only
+    after the revoked row's own status is already updated to
+    ``'revoked'``, so it naturally excludes itself without needing to be
+    told which assignment just changed."""
+    stmt = (
+        select(func.count())
+        .select_from(RoleAssignment)
+        .join(Role, Role.id == RoleAssignment.role_id)
+        .where(
+            RoleAssignment.user_id == user_id,
+            RoleAssignment.status == "active",
+            Role.requires_mfa.is_(True),
+        )
+    )
+    return (await session.execute(stmt)).scalar_one() > 0
+
+
 # --- casbin_rule (g-rows only; p-rows are seeded by migration) --------------
 
 

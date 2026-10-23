@@ -8,7 +8,7 @@ from uuid import UUID, uuid4, uuid7
 import pytest
 import pytest_asyncio
 from sf_messaging import build_envelope
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
@@ -439,3 +439,104 @@ async def test_user_reactivated_restores_only_customer_role(
         assert customer_rows[0].status == "active"
         # org_admin stays suspended -- only customer is restored by user.reactivated.
         assert org_rows[0].status == "suspended"
+
+
+async def test_user_disabled_emits_mfa_group_sync_required_false_for_a_platform_role(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``super_user`` is ``requires_mfa`` (platform-scoped); suspending it
+    via ``user.disabled`` must also ask Keycloak to drop the group
+    membership, same extension ``revoke_role`` got."""
+    from app import event_handlers, repository
+
+    user_id = uuid7()
+
+    async with session_factory() as session, session.begin():
+        await repository.grant_role_unconditional(
+            session,
+            user_id=user_id,
+            role_id="super_user",
+            domain="platform",
+            org_id=None,
+            membership_id=None,
+            granted_by=user_id,
+            reason=None,
+        )
+
+    envelope = build_envelope(
+        event_type="user.disabled",
+        source="users-svc",
+        subject=str(user_id),
+        data={"user_id": str(user_id), "status": "disabled"},
+        schema_version="1.0",
+        aggregate_type="user",
+        aggregate_version=2,
+    )
+    await _run(session_factory, event_handlers.handle_user_disabled, envelope)
+
+    async with session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT payload FROM outbox "
+                        "WHERE payload->>'type' = 'identity.mfa_group_sync_requested' "
+                        "AND payload->'data'->>'user_id' = :user_id"
+                    ),
+                    {"user_id": str(user_id)},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0]["payload"]["data"]["required"] is False
+
+
+async def test_user_disabled_emits_no_mfa_sync_without_an_mfa_role(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``customer`` doesn't require MFA, so disabling a plain user must not
+    publish anything on ``identity.mfa_group_sync_requested`` at all."""
+    from app import event_handlers, repository
+
+    user_id = uuid7()
+
+    async with session_factory() as session, session.begin():
+        await repository.grant_role_unconditional(
+            session,
+            user_id=user_id,
+            role_id="customer",
+            domain="customer",
+            org_id=None,
+            membership_id=None,
+            granted_by=user_id,
+            reason=None,
+        )
+
+    envelope = build_envelope(
+        event_type="user.disabled",
+        source="users-svc",
+        subject=str(user_id),
+        data={"user_id": str(user_id), "status": "disabled"},
+        schema_version="1.0",
+        aggregate_type="user",
+        aggregate_version=2,
+    )
+    await _run(session_factory, event_handlers.handle_user_disabled, envelope)
+
+    async with session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT 1 FROM outbox "
+                        "WHERE payload->>'type' = 'identity.mfa_group_sync_requested' "
+                        "AND payload->'data'->>'user_id' = :user_id"
+                    ),
+                    {"user_id": str(user_id)},
+                )
+            )
+            .all()
+        )
+    assert rows == []

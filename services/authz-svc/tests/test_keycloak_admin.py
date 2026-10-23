@@ -89,6 +89,26 @@ async def test_add_user_to_group_caches_the_group_id_across_calls() -> None:
     assert group_lookups == 1
 
 
+async def test_remove_user_from_group_resolves_group_id_then_leaves() -> None:
+    delete_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return _token_response()
+        if request.url.path.endswith("/groups"):
+            assert request.url.params["search"] == "mfa-required"
+            return httpx.Response(200, json=[{"id": "group-123", "name": "mfa-required"}])
+        if request.method == "DELETE":
+            delete_calls.append(request.url.path)
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _client(handler)
+    await client.remove_user_from_group(keycloak_user_id="kc-user-1", group_name="mfa-required")
+
+    assert delete_calls == ["/admin/realms/scaleforge/users/kc-user-1/groups/group-123"]
+
+
 async def test_add_user_to_group_raises_for_an_unknown_group() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/token"):

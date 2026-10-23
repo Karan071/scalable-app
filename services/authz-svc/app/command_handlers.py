@@ -11,6 +11,12 @@ outbox/relay/inbox), rather than a synchronous call inside ``assign_role``'s
 own transaction (Keycloak calls aren't transactional and shouldn't block or
 fail a DB write on a downstream HTTP error).
 
+The command also covers the remove direction (``data["required"] is
+False``), emitted by ``revoke_role`` when a user's last ``requires_mfa``
+role is revoked -- an extension beyond LLD-01 §9's literal "adds the user"
+wording, not covered by any Draft doc either; see ``events.py``'s
+``emit_mfa_group_sync`` docstring.
+
 Deliberate deviation from LLD-08 §4.2's and LLD-02 §7 step 6's wording
 ("handler: users") -- both still Draft v0.1, and conflict with LLD-01's
 Accepted (2026-10-17) text plus the realm's own dedicated
@@ -37,14 +43,21 @@ def build_dispatch(keycloak_admin: KeycloakAdminClient) -> Mapping[str, Any]:
     async def handle_identity_mfa_group_sync_requested(
         session: AsyncSession, envelope: dict
     ) -> None:
-        user_id = UUID(envelope["data"]["user_id"])
+        data = envelope["data"]
+        user_id = UUID(data["user_id"])
+        required = bool(data.get("required", True))
         keycloak_user_id = await keycloak_admin.find_keycloak_id_by_sf_uid(str(user_id))
         if keycloak_user_id is None:
             # Permanent: no such user in Keycloak, nothing to sync (LLD-08 §7).
             return
-        await keycloak_admin.add_user_to_group(
-            keycloak_user_id=keycloak_user_id, group_name=MFA_REQUIRED_GROUP
-        )
+        if required:
+            await keycloak_admin.add_user_to_group(
+                keycloak_user_id=keycloak_user_id, group_name=MFA_REQUIRED_GROUP
+            )
+        else:
+            await keycloak_admin.remove_user_from_group(
+                keycloak_user_id=keycloak_user_id, group_name=MFA_REQUIRED_GROUP
+            )
 
     return {
         "identity.mfa_group_sync_requested": handle_identity_mfa_group_sync_requested,
