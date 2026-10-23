@@ -58,6 +58,10 @@ class RoleNotGrantable(Exception):
 async def _refresh_membership_projection(
     session: AsyncSession, *, membership_id: UUID, org_id: UUID, orgs_client: OrgsClient
 ) -> MembershipProjection:
+    # Must stay the first thing the write path does, before any SQL: the
+    # session takes its connection lazily, so this HTTP call holds none
+    # (LLD-02 §7 "before step 1"; LLD-09 §3). Guarded by
+    # test_the_orgs_svc_freshness_call_holds_no_db_connection.
     membership = await orgs_client.get_membership(str(membership_id), org_id=str(org_id))
     if membership is None or membership.status != "active":
         raise MembershipNotActive(membership_id)

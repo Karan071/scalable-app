@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sf_authz import AuthenticatedUser, Authorize, PolicyEnforcer, Principal
+from sf_db import transaction
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import repository, service
@@ -132,37 +133,40 @@ async def assign_org_role(
     org_id: UUID,
     body: AssignRoleRequest,
     request: Request,
-    session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(require_assign_role_assignment),
 ) -> RoleAssignmentResponse:
     actor_id = _sf_uid(principal)
-    try:
-        result = await service.assign_role(
-            session,
-            org_id=org_id,
-            membership_id=body.membership_id,
-            target_user_id=body.user_id,
-            role_id=body.role_id,
-            actor_id=actor_id,
-            actor_subject=principal.casbin_subject(),
-            reason=body.reason,
-            enforcer=_enforcer(request),
-            orgs_client=_orgs_client(request),
-        )
-    except service.MembershipNotActive as exc:
-        raise HTTPException(status_code=409, detail="membership is not active") from exc
-    except service.NotFoundError as exc:
-        raise HTTPException(status_code=404, detail="role not found") from exc
-    except service.ScopeMismatch as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except service.AssignableByDenied as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except service.SelfGrantForbidden as exc:
-        raise HTTPException(status_code=403, detail="cannot grant a role to yourself") from exc
-    except repository.AlreadyAssigned as exc:
-        raise HTTPException(
-            status_code=409, detail="the user already holds this role in this domain"
-        ) from exc
+    # Explicit transaction, not Depends(get_session): the publish below must
+    # follow the commit (LLD-02 §7 step 8), and a dependency commits only
+    # after the handler returns.
+    async with transaction(request.app.state.session_factory) as session:
+        try:
+            result = await service.assign_role(
+                session,
+                org_id=org_id,
+                membership_id=body.membership_id,
+                target_user_id=body.user_id,
+                role_id=body.role_id,
+                actor_id=actor_id,
+                actor_subject=principal.casbin_subject(),
+                reason=body.reason,
+                enforcer=_enforcer(request),
+                orgs_client=_orgs_client(request),
+            )
+        except service.MembershipNotActive as exc:
+            raise HTTPException(status_code=409, detail="membership is not active") from exc
+        except service.NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="role not found") from exc
+        except service.ScopeMismatch as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except service.AssignableByDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except service.SelfGrantForbidden as exc:
+            raise HTTPException(status_code=403, detail="cannot grant a role to yourself") from exc
+        except repository.AlreadyAssigned as exc:
+            raise HTTPException(
+                status_code=409, detail="the user already holds this role in this domain"
+            ) from exc
     await _publish_policy_version(request, result.policy_version)
     return _assignment_out(result.assignment)
 
@@ -174,31 +178,36 @@ async def revoke_org_role(
     request: Request,
     if_match: int = Header(..., alias="If-Match"),
     reason: str | None = Query(default=None),
-    session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(require_revoke_role_assignment),
 ) -> dict[str, str]:
     actor_id = _sf_uid(principal)
-    try:
-        result = await service.revoke_role(
-            session,
-            assignment_id,
-            domain=f"org:{org_id}",
-            expected_version=if_match,
-            actor_id=actor_id,
-            actor_subject=principal.casbin_subject(),
-            reason=reason,
-            enforcer=_enforcer(request),
-        )
-    except service.NotFoundError as exc:
-        raise HTTPException(status_code=404) from exc
-    except repository.VersionConflict as exc:
-        raise HTTPException(status_code=412, detail="version conflict, refetch and retry") from exc
-    except service.AssignableByDenied as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except service.LastAdminProtected as exc:
-        raise HTTPException(
-            status_code=409, detail="cannot revoke the last active org_admin"
-        ) from exc
+    # Explicit transaction, not Depends(get_session): the publish below must
+    # follow the commit (LLD-02 §7 step 8), and a dependency commits only
+    # after the handler returns.
+    async with transaction(request.app.state.session_factory) as session:
+        try:
+            result = await service.revoke_role(
+                session,
+                assignment_id,
+                domain=f"org:{org_id}",
+                expected_version=if_match,
+                actor_id=actor_id,
+                actor_subject=principal.casbin_subject(),
+                reason=reason,
+                enforcer=_enforcer(request),
+            )
+        except service.NotFoundError as exc:
+            raise HTTPException(status_code=404) from exc
+        except repository.VersionConflict as exc:
+            raise HTTPException(
+                status_code=412, detail="version conflict, refetch and retry"
+            ) from exc
+        except service.AssignableByDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except service.LastAdminProtected as exc:
+            raise HTTPException(
+                status_code=409, detail="cannot revoke the last active org_admin"
+            ) from exc
     await _publish_policy_version(request, result.policy_version)
     return {"status": "revoked"}
 
@@ -235,36 +244,39 @@ async def list_platform_role_assignments(
 async def assign_platform_role(
     body: AssignPlatformRoleRequest,
     request: Request,
-    session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(require_assign_platform_role_assignment),
 ) -> RoleAssignmentResponse:
     actor_id = _sf_uid(principal)
     auth_time = principal.claim("auth_time")
-    try:
-        result = await service.assign_platform_role(
-            session,
-            target_user_id=body.user_id,
-            role_id=body.role_id,
-            actor_id=actor_id,
-            actor_subject=principal.casbin_subject(),
-            actor_auth_time=float(auth_time) if auth_time is not None else None,
-            reason=body.reason,
-            enforcer=_enforcer(request),
-        )
-    except service.NotFoundError as exc:
-        raise HTTPException(status_code=404, detail="role not found") from exc
-    except service.ScopeMismatch as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except service.AssignableByDenied as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except service.SelfGrantForbidden as exc:
-        raise HTTPException(status_code=403, detail="cannot grant a role to yourself") from exc
-    except repository.AlreadyAssigned as exc:
-        raise HTTPException(
-            status_code=409, detail="the user already holds this role in this domain"
-        ) from exc
-    except (ValueError, PermissionError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Explicit transaction, not Depends(get_session): the publish below must
+    # follow the commit (LLD-02 §7 step 8), and a dependency commits only
+    # after the handler returns.
+    async with transaction(request.app.state.session_factory) as session:
+        try:
+            result = await service.assign_platform_role(
+                session,
+                target_user_id=body.user_id,
+                role_id=body.role_id,
+                actor_id=actor_id,
+                actor_subject=principal.casbin_subject(),
+                actor_auth_time=float(auth_time) if auth_time is not None else None,
+                reason=body.reason,
+                enforcer=_enforcer(request),
+            )
+        except service.NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="role not found") from exc
+        except service.ScopeMismatch as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except service.AssignableByDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except service.SelfGrantForbidden as exc:
+            raise HTTPException(status_code=403, detail="cannot grant a role to yourself") from exc
+        except repository.AlreadyAssigned as exc:
+            raise HTTPException(
+                status_code=409, detail="the user already holds this role in this domain"
+            ) from exc
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _publish_policy_version(request, result.policy_version)
     return _assignment_out(result.assignment)
 
@@ -275,27 +287,32 @@ async def revoke_platform_role(
     request: Request,
     if_match: int = Header(..., alias="If-Match"),
     reason: str | None = Query(default=None),
-    session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(require_revoke_platform_role_assignment),
 ) -> dict[str, str]:
     actor_id = _sf_uid(principal)
-    try:
-        result = await service.revoke_role(
-            session,
-            assignment_id,
-            domain="platform",
-            expected_version=if_match,
-            actor_id=actor_id,
-            actor_subject=principal.casbin_subject(),
-            reason=reason,
-            enforcer=_enforcer(request),
-        )
-    except service.NotFoundError as exc:
-        raise HTTPException(status_code=404) from exc
-    except repository.VersionConflict as exc:
-        raise HTTPException(status_code=412, detail="version conflict, refetch and retry") from exc
-    except service.AssignableByDenied as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    # Explicit transaction, not Depends(get_session): the publish below must
+    # follow the commit (LLD-02 §7 step 8), and a dependency commits only
+    # after the handler returns.
+    async with transaction(request.app.state.session_factory) as session:
+        try:
+            result = await service.revoke_role(
+                session,
+                assignment_id,
+                domain="platform",
+                expected_version=if_match,
+                actor_id=actor_id,
+                actor_subject=principal.casbin_subject(),
+                reason=reason,
+                enforcer=_enforcer(request),
+            )
+        except service.NotFoundError as exc:
+            raise HTTPException(status_code=404) from exc
+        except repository.VersionConflict as exc:
+            raise HTTPException(
+                status_code=412, detail="version conflict, refetch and retry"
+            ) from exc
+        except service.AssignableByDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     await _publish_policy_version(request, result.policy_version)
     return {"status": "revoked"}
 

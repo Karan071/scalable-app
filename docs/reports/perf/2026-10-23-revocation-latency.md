@@ -53,8 +53,15 @@ watcher-on paths.**
   policy and stays stale until the next poll (~10 s). Across 400 watcher-on
   trials no such tail appeared: the 200 ms debounce gives the commit time
   to land. That shows the race doesn't bite on an idle system, **not** that
-  it can't under load (a commit slower than 200 ms). Recommended fix:
-  publish from an after-commit hook.
+  it can't under load (a commit slower than 200 ms).
+  **Resolved (follow-up, same day):** the four policy-changing routes now
+  run their own transaction and publish after it closes. A regression test
+  (`test_policy_version_is_published_only_after_it_commits`) reads
+  `policy_version` from a separate connection at publish time: it failed
+  6/6 before the fix and passes 6/6 after. A 100-trial rerun showed no
+  latency change (direct p99 0.258 s, membership p99 0.286 s), which is
+  expected: the debounce already hid the race when idle; the fix removes
+  the dependence on that timing.
 
 ## Limitations
 

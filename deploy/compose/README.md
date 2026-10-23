@@ -209,7 +209,9 @@ two can't share one interpreter. They use the same test environment plus a
 fake OIDC IdP (JWKS and token endpoint) in place of Keycloak, so no
 production code is bypassed. `make test-revocation-latency` measures LLD-02
 §8's revocation targets and writes a report to `docs/reports/perf/`. It's
-slow (minutes) and is not part of `make test`. Service logs go to
+slow (minutes) and is not part of `make test`. `make test-system`
+runs the pass/fail system tests (e.g. LLD-09 §2 bulkheads under a slow
+Keycloak). Service logs go to
 `.local/system-tests/`.
 
 `make migrate` applies every service's migrations to the dev DB

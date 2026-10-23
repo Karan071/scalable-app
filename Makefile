@@ -1,4 +1,4 @@
-.PHONY: sync fmt lint typecheck test test-env test-alerts test-revocation-latency migrate dev dev-down dev-logs dev-db-reset
+.PHONY: sync fmt lint typecheck test test-env test-alerts test-system test-revocation-latency migrate dev dev-down dev-logs dev-db-reset
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml --env-file .env
 
@@ -63,6 +63,9 @@ migrate: ## Apply every service's migrations to DB (default: the dev DB, scalefo
 		(cd services/$$svc && SF_DB_NAME=$(or $(DB),scaleforge) SF_DB_PASSWORD="$$POSTGRES_APP_PASSWORD" \
 			uv run --quiet alembic upgrade head) || exit 1; \
 	done
+
+test-system: test-env ## Cross-service system tests: real service processes on the test env (tests/system/).
+	uv run --all-packages pytest tests/system -q
 
 test-revocation-latency: test-env ## M2 exit evidence: role-revocation latency vs LLD-02 §8 (slow; TRIALS=200, CONCURRENCY=10).
 	uv run --all-packages python tests/system/revocation_latency.py \

@@ -38,6 +38,9 @@ DEFAULT_BATCH_SIZE = 200
 DEFAULT_POLL_INTERVAL_S = 0.25
 DEFAULT_CONFIRM_TIMEOUT_S = 5.0
 DEFAULT_BACKLOG_REFRESH_S = 5.0
+# The relay's loop uses one session at a time (claim+publish+mark, then the
+# backlog refresh), so its own engine needs only this many connections.
+RELAY_POOL_SIZE = 2
 
 _EVENTS_EXCHANGE = "sf.events"
 _AMQP_NO_ROUTE = 312

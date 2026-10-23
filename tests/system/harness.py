@@ -56,10 +56,19 @@ ENV = _dotenv()
 
 
 class FakeIdP:
-    """JWKS + client-credentials token endpoint on 127.0.0.1."""
+    """JWKS + client-credentials token endpoint on 127.0.0.1.
 
-    def __init__(self) -> None:
+    ``token_delay_s`` makes the token endpoint answer slowly, standing in for
+    a degraded Keycloak (LLD-13 FS-3, slow dependency).
+    """
+
+    def __init__(self, *, token_delay_s: float = 0.0) -> None:
         self._key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        # Live view of callers stuck on the token endpoint (unlike RabbitMQ's
+        # management stats, which refresh only every few seconds).
+        self._lock = threading.Lock()
+        self.tokens_in_flight = 0
+        self.max_tokens_in_flight = 0
         jwk = json.loads(RSAAlgorithm(RSAAlgorithm.SHA256).to_jwk(self._key.public_key()))
         jwk.update(kid=_KID, use="sig", alg="RS256")
         jwks_body = json.dumps({"keys": [jwk]}).encode()
@@ -70,6 +79,14 @@ class FakeIdP:
                 self._reply(jwks_body)
 
             def do_POST(self) -> None:  # noqa: N802
+                with idp._lock:
+                    idp.tokens_in_flight += 1
+                    idp.max_tokens_in_flight = max(idp.max_tokens_in_flight, idp.tokens_in_flight)
+                try:
+                    time.sleep(token_delay_s)
+                finally:
+                    with idp._lock:
+                        idp.tokens_in_flight -= 1
                 form = parse_qs(self.rfile.read(int(self.headers["content-length"])).decode())
                 client_id = form["client_id"][0]
                 self._reply(

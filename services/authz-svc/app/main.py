@@ -22,7 +22,13 @@ from sf_common import (
     install_problem_details,
     instrument_fastapi_app,
 )
-from sf_messaging import InboxConsumer, OutboxRelay
+from sf_db import worker_pool
+from sf_messaging import (
+    DEFAULT_HANDLER_CONCURRENCY,
+    RELAY_POOL_SIZE,
+    InboxConsumer,
+    OutboxRelay,
+)
 from sqlalchemy import text
 
 from . import command_handlers, event_handlers
@@ -55,6 +61,12 @@ def _asyncpg_dsn(settings: Settings) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = build_authz_engine(settings)
+    # LLD-09 §2 bulkheads: requests, the relay, and each consumer get their own
+    # pool, so a backlog in one (e.g. slow Keycloak calls in a handler) can't
+    # starve the others. Consumer pools match their handler concurrency.
+    relay_engine = build_authz_engine(settings, **worker_pool(RELAY_POOL_SIZE))
+    authz_identity_engine = build_authz_engine(settings, **worker_pool(DEFAULT_HANDLER_CONCURRENCY))
+    authz_commands_engine = build_authz_engine(settings, **worker_pool(DEFAULT_HANDLER_CONCURRENCY))
     http_client = create_http_client()
     redis: Redis = Redis.from_url(settings.redis_cache_url, decode_responses=True)
     enforcer = build_authz_reader_enforcer(settings)
@@ -84,7 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     relay = OutboxRelay(
         service_name="authz-svc",
-        session_factory=session_factory,
+        session_factory=build_authz_session_factory(relay_engine),
         dsn_asyncpg=_asyncpg_dsn(settings),
         amqp_url=_amqp_url(settings),
         notify_channel="outbox_authz",
@@ -100,7 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     consumer = InboxConsumer(
         consumer_name=event_handlers.CONSUMER_NAME,
-        session_factory=session_factory,
+        session_factory=build_authz_session_factory(authz_identity_engine),
         amqp_url=_amqp_url(settings),
         queue_name="q.authz.identity",
         handlers=event_handlers.DISPATCH,
@@ -118,7 +130,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     commands_consumer = InboxConsumer(
         consumer_name=command_handlers.CONSUMER_NAME,
-        session_factory=session_factory,
+        session_factory=build_authz_session_factory(authz_commands_engine),
         amqp_url=_amqp_url(settings),
         queue_name="q.authz.commands",
         handlers=command_handlers.build_dispatch(keycloak_admin),
@@ -135,6 +147,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await http_client.aclose()
     await redis.aclose()
     await engine.dispose()
+    await relay_engine.dispose()
+    await authz_identity_engine.dispose()
+    await authz_commands_engine.dispose()
 
 
 async def _db_ready() -> bool:

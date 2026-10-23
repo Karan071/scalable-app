@@ -58,7 +58,7 @@
 | Reserved: superuser and CNPG internals | — | — | 20 |
 | Headroom | — | — | 50 |
 | **Total** | | | **400** |
-| Bulkheads | Separate engines (pools) for request handling and background workers (relay, sweepers, consumers) in each service, so a backlog cannot starve requests |
+| Bulkheads | Separate engines (pools) for request handling and background workers (relay, sweepers, consumers) in each service, so a backlog cannot starve requests. **Implemented (M2):** every service builds one request engine plus one engine per background worker: the outbox relay (`RELAY_POOL_SIZE`, 2) and each inbox consumer (`sf_db.worker_pool(DEFAULT_HANDLER_CONCURRENCY)`, 10, no overflow, 30 s checkout wait instead of failing fast). Verified by `tests/system/test_bulkheads.py`: with Keycloak answering in 5 s and 40 commands queued, requests stay fast. Before the change, the same setup exhausted the shared pool and starved both requests and the relay. |
 
 **Sizing:** by Little's law, `busy_connections ≈ throughput × mean DB time per request`. For example, 300 req/s × 15 ms ≈ 4.5 busy connections. Pools are sized for p99 bursts, then **verified** by EXP-3 (pool wait time histogram, PgBouncer `cl_waiting`).
 

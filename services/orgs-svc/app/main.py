@@ -23,7 +23,13 @@ from sf_common import (
     install_problem_details,
     instrument_fastapi_app,
 )
-from sf_messaging import InboxConsumer, OutboxRelay
+from sf_db import worker_pool
+from sf_messaging import (
+    DEFAULT_HANDLER_CONCURRENCY,
+    RELAY_POOL_SIZE,
+    InboxConsumer,
+    OutboxRelay,
+)
 from sqlalchemy import text
 
 from . import event_handlers
@@ -54,6 +60,11 @@ def _asyncpg_dsn(settings: Settings) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = build_orgs_engine(settings)
+    # LLD-09 §2 bulkheads: requests, the relay, and each consumer get their own
+    # pool, so a backlog in one (e.g. slow Keycloak calls in a handler) can't
+    # starve the others. Consumer pools match their handler concurrency.
+    relay_engine = build_orgs_engine(settings, **worker_pool(RELAY_POOL_SIZE))
+    orgs_users_engine = build_orgs_engine(settings, **worker_pool(DEFAULT_HANDLER_CONCURRENCY))
     session_factory = build_orgs_session_factory(engine)
     app.state.settings = settings
     app.state.session_factory = session_factory
@@ -79,7 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     relay = OutboxRelay(
         service_name="orgs-svc",
-        session_factory=session_factory,
+        session_factory=build_orgs_session_factory(relay_engine),
         dsn_asyncpg=_asyncpg_dsn(settings),
         amqp_url=_amqp_url(settings),
         notify_channel="outbox_orgs",
@@ -89,7 +100,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     consumer = InboxConsumer(
         consumer_name=event_handlers.CONSUMER_NAME,
-        session_factory=session_factory,
+        session_factory=build_orgs_session_factory(orgs_users_engine),
         amqp_url=_amqp_url(settings),
         queue_name="q.orgs.users",
         handlers=event_handlers.DISPATCH,
@@ -104,6 +115,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await watcher.stop()
     await redis.aclose()
     await engine.dispose()
+    await relay_engine.dispose()
+    await orgs_users_engine.dispose()
 
 
 async def _db_ready() -> bool:

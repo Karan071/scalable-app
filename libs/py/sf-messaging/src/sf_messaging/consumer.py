@@ -11,6 +11,7 @@ failing message goes straight to whatever the queue is configured to
 dead-letter into.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -30,6 +31,10 @@ logger = logging.getLogger("sf_messaging.consumer")
 _tracer = trace.get_tracer(__name__)
 
 DEFAULT_PREFETCH = 20
+# LLD-08 §6: "prefetch 20 per channel and a per-pod handler concurrency of
+# 10". The cap bounds how many inbox transactions (pooled connections) one
+# consumer holds at once: size its engine with sf_db.worker_pool(this).
+DEFAULT_HANDLER_CONCURRENCY = 10
 
 _VALID_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*$")
 
@@ -52,6 +57,7 @@ class InboxConsumer:
         queue_name: str,
         handlers: Mapping[str, HandlerFn],
         prefetch: int = DEFAULT_PREFETCH,
+        handler_concurrency: int = DEFAULT_HANDLER_CONCURRENCY,
         inbox_table: str = "inbox",
         on_handled: OnHandledFn | None = None,
     ) -> None:
@@ -64,6 +70,7 @@ class InboxConsumer:
         self._queue_name = queue_name
         self._handlers = handlers
         self._prefetch = prefetch
+        self._slots = asyncio.Semaphore(handler_concurrency)
         self._on_handled = on_handled
 
         self._insert_inbox_sql = text(
@@ -93,6 +100,10 @@ class InboxConsumer:
             self._consumer_tag = None
 
     async def _on_message(self, message: aio_pika.abc.AbstractIncomingMessage) -> None:
+        async with self._slots:
+            await self._handle(message)
+
+    async def _handle(self, message: aio_pika.abc.AbstractIncomingMessage) -> None:
         started = time.monotonic()
         event_type = "<unparsed>"
         message_id: UUID | None = None

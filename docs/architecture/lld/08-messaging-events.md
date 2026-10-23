@@ -224,7 +224,7 @@ on message:
   - a notification `dedupe_key`;
   - Keycloak operations that are naturally idempotent (set attribute, add to group).
 - **Projections** additionally apply only newer `sfaggregateversion` (§9).
-- **Concurrency:** prefetch 20 per channel and a per-pod handler concurrency of 10 (tunable). Ack only after commit.
+- **Concurrency:** prefetch 20 per channel and a per-pod handler concurrency of 10 (tunable). Ack only after commit. Implemented in `InboxConsumer` (`handler_concurrency`, default 10); each consumer's own DB pool is sized to match (LLD-09 §2).
 
 ## 7. Retry and dead-letter policy
 

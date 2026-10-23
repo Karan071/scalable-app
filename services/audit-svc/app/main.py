@@ -21,7 +21,8 @@ from sf_common import (
     install_problem_details,
     instrument_fastapi_app,
 )
-from sf_messaging import InboxConsumer
+from sf_db import worker_pool
+from sf_messaging import DEFAULT_HANDLER_CONCURRENCY, InboxConsumer
 from sqlalchemy import text
 
 from . import event_handlers
@@ -45,6 +46,10 @@ def _amqp_url(settings: Settings) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = build_audit_engine(settings)
+    # LLD-09 §2 bulkheads: requests, the relay, and each consumer get their own
+    # pool, so a backlog in one (e.g. slow Keycloak calls in a handler) can't
+    # starve the others. Consumer pools match their handler concurrency.
+    audit_ingest_engine = build_audit_engine(settings, **worker_pool(DEFAULT_HANDLER_CONCURRENCY))
     redis: Redis = Redis.from_url(settings.redis_cache_url, decode_responses=True)
     enforcer = build_audit_reader_enforcer(settings)
     enforcer.load()
@@ -63,7 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     consumer = InboxConsumer(
         consumer_name=event_handlers.CONSUMER_NAME,
-        session_factory=session_factory,
+        session_factory=build_audit_session_factory(audit_ingest_engine),
         amqp_url=_amqp_url(settings),
         queue_name="q.audit.ingest",
         handlers=event_handlers.DISPATCH,
@@ -78,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await watcher.stop()
     await redis.aclose()
     await engine.dispose()
+    await audit_ingest_engine.dispose()
 
 
 async def _db_ready() -> bool:

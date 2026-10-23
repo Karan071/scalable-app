@@ -264,3 +264,83 @@ def test_assigning_a_role_the_user_already_holds_is_409_not_500(client: TestClie
     # The rejected attempt left nothing behind: one assignment, one grant.
     listed = client.get(f"/v1/orgs/{org_id}/role-assignments", params={"user_id": str(target_id)})
     assert [a["role_id"] for a in listed.json()] == ["catalog_manager"]
+
+
+class _CommitCheckingRedis:
+    """Stands in for redis-cache on the publish path only. At each publish it
+    reads policy_version through a separate session: under READ COMMITTED
+    that's what every other process's watcher would see if it reloaded now."""
+
+    def __init__(self, session_factory) -> None:  # type: ignore[no-untyped-def]
+        self._session_factory = session_factory
+        self.published: list[tuple[int, int]] = []  # (published, committed)
+
+    async def publish(self, channel: str, message: str) -> int:
+        from sqlalchemy import text
+
+        async with self._session_factory() as session:
+            committed = (
+                await session.execute(text("SELECT version FROM policy_version WHERE id = 1"))
+            ).scalar_one()
+        self.published.append((int(message), committed))
+        return 1
+
+
+def test_policy_version_is_published_only_after_it_commits(client: TestClient) -> None:
+    """LLD-02 §7 step 8: "After commit: PUBLISH authz:policy <version>". A
+    watcher that reloads on a notice for an uncommitted version reads the old
+    policy and stays stale until its next poll (up to 10 s)."""
+    org_id, actor_id, target_id, membership_id = uuid7(), uuid7(), uuid7(), uuid7()
+    _setup_org_admin(client, org_id=org_id, actor_id=actor_id)
+    override_all_as(client.app, actor_id, acr=2)
+    client.app.state.orgs_client = FakeOrgsClient(default_user_id=target_id)
+    redis = _CommitCheckingRedis(client.app.state.session_factory)
+    client.app.state.redis = redis
+
+    granted = client.post(
+        f"/v1/orgs/{org_id}/role-assignments",
+        json={
+            "user_id": str(target_id),
+            "role_id": "catalog_manager",
+            "membership_id": str(membership_id),
+        },
+    ).json()
+    revoked = client.delete(
+        f"/v1/orgs/{org_id}/role-assignments/{granted['id']}",
+        headers={"If-Match": str(granted["version"])},
+    )
+
+    assert revoked.status_code == 200, revoked.text
+    assert len(redis.published) == 2, redis.published
+    for published, committed in redis.published:
+        assert committed >= published, f"published v{published} while v{committed} was committed"
+
+
+def test_the_orgs_svc_freshness_call_holds_no_db_connection(client: TestClient) -> None:
+    """LLD-02 §7 makes the orgs-svc call *before* step 1, and LLD-09 §3 bans
+    outbound calls inside a transaction: a slow orgs-svc would otherwise pin
+    one request-pool connection per grant for the whole HTTP timeout."""
+    org_id, actor_id, target_id, membership_id = uuid7(), uuid7(), uuid7(), uuid7()
+    _setup_org_admin(client, org_id=org_id, actor_id=actor_id)
+    override_all_as(client.app, actor_id, acr=2)
+    request_pool = client.app.state.session_factory.kw["bind"].pool
+    held_during_call: list[int] = []
+
+    class _PoolProbingOrgsClient(FakeOrgsClient):
+        async def get_membership(self, membership_id, *, org_id):  # type: ignore[no-untyped-def]
+            held_during_call.append(request_pool.checkedout())
+            return await super().get_membership(membership_id, org_id=org_id)
+
+    client.app.state.orgs_client = _PoolProbingOrgsClient(default_user_id=target_id)
+
+    resp = client.post(
+        f"/v1/orgs/{org_id}/role-assignments",
+        json={
+            "user_id": str(target_id),
+            "role_id": "catalog_manager",
+            "membership_id": str(membership_id),
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert held_during_call == [0]

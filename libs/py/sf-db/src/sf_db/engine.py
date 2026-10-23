@@ -47,3 +47,14 @@ def build_engine(
     # that's the instrumentation's own default behavior, not opt-in here.
     SQLAlchemyInstrumentor().instrument(engine=engine.sync_engine)
     return engine
+
+
+def worker_pool(size: int) -> dict[str, float | int]:
+    """Pool settings for a background worker's own engine (LLD-09 §2 bulkheads).
+
+    Sized to the worker's own concurrency, so it never needs overflow; and it
+    waits for a connection rather than failing fast like request handling,
+    because a background worker should apply backpressure, not error. Pass
+    as ``build_engine(..., **worker_pool(n))``.
+    """
+    return {"pool_size": size, "max_overflow": 0, "pool_timeout": 30.0}
