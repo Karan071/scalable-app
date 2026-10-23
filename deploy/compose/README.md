@@ -176,15 +176,20 @@ After logging in, switch realm (top-left dropdown, currently showing
 
 - **Clients** → `sf-bff`, `sf-svc-bff`, `sf-svc-users`, `sf-svc-orgs`,
   `sf-svc-authz`, `sf-users-admin`, `sf-authz-admin` all exist.
-- **Groups** → `mfa-required` exists.
+- **Groups** → `mfa-required` exists, with realm role `mfa_required`.
 - **Realm settings → Tokens** → Access Token Lifespan shows 5 minutes.
+- **Authentication** → `sf-browser` is bound as the browser flow (MFA and
+  step-up, LLD-01 §3.3).
 
 If any of this is missing, `keycloak-config-cli` didn't apply cleanly —
-check its logs (step 3).
+check its logs (step 3). It skips files it has already applied, so after
+editing the realm file re-run it with
+`docker compose -f deploy/compose/compose.yaml --env-file .env run --rm --no-deps keycloak-config-cli`.
 
-> MFA/step-up enforcement isn't configured yet (deferred, see the comment at
-> the bottom of `keycloak/realm-scaleforge.json`), so there's nothing to test
-> around conditional OTP yet.
+To see MFA by hand: add a user to `mfa-required` and sign in through the
+BFF. The user must enroll an authenticator app, and every step-up
+(`/auth/step-up`) asks for a code. `make test-system` checks all of this
+automatically (`tests/system/test_bff_login.py`).
 
 ## 10. Tests and the isolated test environment
 
@@ -211,8 +216,12 @@ production code is bypassed. `make test-revocation-latency` measures LLD-02
 §8's revocation targets and writes a report to `docs/reports/perf/`. It's
 slow (minutes) and is not part of `make test`. `make test-system`
 runs the pass/fail system tests (e.g. LLD-09 §2 bulkheads under a slow
-Keycloak). Service logs go to
-`.local/system-tests/`.
+Keycloak). `test_bff_login.py` is the exception to the fake IdP: it signs
+throwaway users in through two BFF replicas against the real Compose
+Keycloak (MFA, step-up, logout, admin disable) and deletes them afterwards.
+`test_tenant_isolation.py` runs the LLD-14 §4 tenant-isolation matrix. It
+generates the matrix from the `x-sf-authz` route metadata in each service's
+`/openapi.json`. Service logs go to `.local/system-tests/`.
 
 `make migrate` applies every service's migrations to the dev DB
 (`make migrate DB=<name>` for another).

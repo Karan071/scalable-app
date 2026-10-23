@@ -82,13 +82,27 @@ class OidcClient:
             "code_challenge_method": "S256",
         }
         if acr_values:
+            # No max_age=0: Keycloak would re-run every level, so a step-up
+            # cost password + OTP + OTP. The realm's level-2 condition has
+            # max-age 0, so the second factor is re-prompted every time; the
+            # callback checks auth_time advanced (LLD-01 §3.3, §9).
             params["acr_values"] = acr_values
-            params["max_age"] = "0"
         return f"{self._discovery.authorization_endpoint}?{urlencode(params)}"
 
-    def end_session_url(self, *, id_token: str, post_logout_redirect_uri: str) -> str:
-        params = {"id_token_hint": id_token, "post_logout_redirect_uri": post_logout_redirect_uri}
-        return f"{self._discovery.end_session_endpoint}?{urlencode(params)}"
+    async def end_session(self, *, refresh_token: str) -> None:
+        """Ends the Keycloak session server-side: Keycloak's end-session
+        endpoint accepts a confidential client's refresh token. Redirecting
+        the browser there instead would need ``id_token_hint`` in the URL,
+        putting the ID token in the browser (LLD-01 §8, §16)."""
+        resp = await self._http.post(
+            self._discovery.end_session_endpoint,
+            data={
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                "refresh_token": refresh_token,
+            },
+        )
+        resp.raise_for_status()
 
     async def exchange_code(self, *, code: str, code_verifier: str) -> dict[str, object]:
         resp = await self._http.post(

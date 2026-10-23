@@ -28,7 +28,6 @@ propagation.
 
 import argparse
 import asyncio
-import json
 import statistics
 import subprocess
 import sys
@@ -38,26 +37,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4, uuid7
 
-import asyncpg
 import httpx
 from harness import (
-    ENV,
-    INVITATION_KEYS,
     REPO_ROOT,
-    TEST_DB,
     FakeIdP,
     ServiceProcess,
     bootstrap_super_user,
+    invitation_token,
     service_env,
     wait_until,
 )
-from sf_common import TokenCipher
 
 ORGS_PORT, AUTHZ_PORT = 18101, 18102
 TARGETS_S = {"direct": 5.0, "membership": 5.0, "watcher-off": 15.0}
 TRIAL_TIMEOUT_S = 60.0
-
-_cipher = TokenCipher.from_base64_keys(INVITATION_KEYS, "k1")
 
 
 @dataclass
@@ -96,24 +89,6 @@ def _email(uid: UUID) -> str:
     return f"rl-{uid}@example.com"
 
 
-async def _invitation_token(org_id: str, email: str) -> str:
-    conn = await asyncpg.connect(
-        host="localhost", database=TEST_DB, user="svc_orgs", password=ENV["POSTGRES_APP_PASSWORD"]
-    )
-    try:
-        row = await conn.fetchrow(
-            "SELECT payload FROM orgs.outbox WHERE payload->>'type' = 'invitation.created' "
-            "AND payload->'data'->>'org_id' = $1 AND payload->'data'->>'email' = $2 "
-            "ORDER BY occurred_at DESC, id DESC LIMIT 1",
-            org_id,
-            email,
-        )
-    finally:
-        await conn.close()
-    data = json.loads(row["payload"])["data"]
-    return _cipher.decrypt(data["token_enc"], aad=data["invitation_id"].encode())
-
-
 async def build_fixture(d: Driver, admin: UUID) -> Fixture:
     a, b = uuid7(), uuid7()
     org = (
@@ -133,12 +108,12 @@ async def build_fixture(d: Driver, admin: UUID) -> Fixture:
     invitations = f"{d.orgs}/v1/orgs/{org_id}/invitations"
 
     # A accepts the owner invitation; org_admin arrives via the real pipeline.
-    token = await _invitation_token(org_id, _email(a))
+    token = await invitation_token(org_id, _email(a))
     await d.ok("POST", f"{d.orgs}/v1/invitations:accept", a, json={"token": token})
     await wait_until(status_is(d, invitations, a, 200), timeout_s=TRIAL_TIMEOUT_S)
 
     await d.ok("POST", invitations, a, json={"email": _email(b), "roles_requested": ["org_admin"]})
-    token = await _invitation_token(org_id, _email(b))
+    token = await invitation_token(org_id, _email(b))
     await d.ok("POST", f"{d.orgs}/v1/invitations:accept", b, json={"token": token})
     await wait_until(status_is(d, invitations, b, 200), timeout_s=TRIAL_TIMEOUT_S)
 

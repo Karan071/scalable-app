@@ -31,6 +31,11 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         raw = request.headers.get("x-correlation-id")
         correlation_id = raw if raw and _UUID_RE.match(raw) else str(uuid.uuid4())
         token = _correlation_id.set(correlation_id)
+        # Also on the (scope-shared) request state: unhandled errors are
+        # rendered by Starlette's outermost ServerErrorMiddleware, after this
+        # context var has been reset -- and those are the responses support
+        # most needs the id for.
+        request.state.correlation_id = correlation_id
         try:
             response = await call_next(request)
         finally:

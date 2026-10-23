@@ -37,6 +37,7 @@ class _StubEnforcer:
     def __init__(self, *, initial_version: int = 1, reload_delay_s: float = 0.0) -> None:
         self.current_version = initial_version
         self.reload_calls: list[int] = []
+        self.confirmations: list[bool] = []
         self._reload_delay_s = reload_delay_s
         self._next_version = initial_version
 
@@ -52,6 +53,11 @@ class _StubEnforcer:
 
     def set_next_version(self, version: int) -> None:
         self._next_version = version
+
+    def confirm_current(self, version: int) -> bool:
+        confirmed = version == self.current_version
+        self.confirmations.append(confirmed)
+        return confirmed
 
 
 @pytest.mark.asyncio
@@ -121,3 +127,38 @@ async def test_poll_loop_alone_triggers_reload_without_redis() -> None:
 
     await watcher.stop()
     assert len(enforcer.reload_calls) >= 1
+
+
+@pytest.mark.asyncio
+async def test_a_poll_at_the_current_version_confirms_freshness_without_reloading() -> None:
+    """LLD-02 §8. Without this, a quiet system drifted into authz_stale after
+    60 s (every mutating request 503) and failed readiness after 300 s."""
+    enforcer = _StubEnforcer(initial_version=3)
+    watcher = PolicyWatcher(
+        enforcer=enforcer, redis_client=None, poll_interval_s=0.05, debounce_s=0.01
+    )
+    await watcher.start()
+
+    await asyncio.sleep(0.2)
+
+    await watcher.stop()
+    assert enforcer.confirmations and all(enforcer.confirmations)
+    assert enforcer.reload_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_poll_at_a_newer_version_reloads_instead_of_confirming() -> None:
+    enforcer = _StubEnforcer(initial_version=3)
+    enforcer.set_next_version(4)
+    watcher = PolicyWatcher(
+        enforcer=enforcer, redis_client=None, poll_interval_s=0.05, debounce_s=0.01
+    )
+    await watcher.start()
+
+    await asyncio.sleep(0.03)  # first poll fires at ~0.05 s
+    assert enforcer.reload_calls == []
+    await asyncio.sleep(0.15)
+
+    await watcher.stop()
+    assert enforcer.reload_calls  # behind -> reload
+    assert enforcer.confirmations[0] is False  # the poll that found v4 confirmed nothing

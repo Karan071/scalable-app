@@ -69,7 +69,7 @@ flowchart LR
 | `q.orders.saga` | `payment.*.v1`, `inventory.committed.v1`, `inventory.released.v1`, `inventory.reservation_expired.v1`, `inventory.restocked.v1` |
 | `q.payments.commands` | `payment.capture_requested.v1`, `payment.void_requested.v1`, `payment.refund_requested.v1` |
 | `q.cart.orders` | `order.confirmed.v1` |
-| `q.users.commands` | `user.idp_sync_requested.v1` |
+| `q.users.commands` | `user.idp_sync_requested.v1`, `user.idp_status_sync_requested.v1` |
 | `q.authz.commands` | `identity.mfa_group_sync_requested.v1` (self-consumed, LLD-01 §9; correction — not `q.users.commands` as this table previously had it) |
 | `q.notifications.requests` | `notification.requested.v1`, `invitation.created.v1` |
 | `q.catalog.orgs` | `organization.*.v1` (store pricing settings projection) |
@@ -145,6 +145,7 @@ These are the PRD §6.2 candidates (marked ●) plus the additions this design n
 | `inventory.commit_requested` / `.release_requested` / `.restock_requested` | orders | inventory |
 | `payment.capture_requested` / `.void_requested` / `.refund_requested` | orders | payments |
 | `user.idp_sync_requested` | users | users (self, async Keycloak sync) |
+| `user.idp_status_sync_requested` | users | users (self; on disable/reactivate, sets the Keycloak user's enabled flag to the user's current status and, when disabling, ends their Keycloak sessions — LLD-01 §11.3) |
 | `identity.mfa_group_sync_requested` | authz | authz (self, Keycloak `mfa-required` group membership via its own `sf-authz-admin` client — LLD-01 §9, accepted; this row previously said "handler: users", which conflicted with that already-accepted text) |
 
 Commands are idempotent by `(subject, type)` plus the business key. The handler emits the resulting event, e.g. `inventory.released`.

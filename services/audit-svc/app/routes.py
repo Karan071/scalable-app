@@ -22,7 +22,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sf_authz import Authorize, Principal
+from sf_authz import Authorize, Principal, org_domain_from_path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import repository
@@ -35,9 +35,7 @@ _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 200
 
 
-def _org_domain(request: Request) -> str:
-    return f"org:{request.path_params['org_id']}"
-
+_org_domain = org_domain_from_path()
 
 require_read_org_audit = Authorize("audit_log", "read", domain=_org_domain)
 require_read_platform_audit = Authorize("audit_log", "read", domain="platform", min_acr=2)

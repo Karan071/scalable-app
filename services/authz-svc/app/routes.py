@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sf_authz import AuthenticatedUser, Authorize, PolicyEnforcer, Principal
+from sf_authz import AuthenticatedUser, Authorize, PolicyEnforcer, Principal, org_domain_from_path
 from sf_db import transaction
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,9 +20,7 @@ router = APIRouter()
 require_authenticated_user = AuthenticatedUser()
 
 
-def _org_domain(request: Request) -> str:
-    return f"org:{request.path_params['org_id']}"
-
+_org_domain = org_domain_from_path()
 
 require_read_role_assignment = Authorize("role_assignment", "read", domain=_org_domain)
 require_assign_role_assignment = Authorize("role_assignment", "assign", domain=_org_domain)

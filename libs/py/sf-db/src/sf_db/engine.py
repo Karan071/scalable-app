@@ -7,7 +7,12 @@ in one cannot starve the other (the "bulkhead" row in LLD-09 §2).
 
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from sqlalchemy import URL
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+# What a pool raises when no connection frees up within pool_timeout. Pass to
+# sf_common.install_problem_details(db_busy_errors=...) for 503 db-busy.
+POOL_TIMEOUT_ERRORS: tuple[type[Exception], ...] = (PoolTimeoutError,)
 
 
 def build_engine(

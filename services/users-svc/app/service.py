@@ -156,6 +156,33 @@ async def request_idp_sync_retry(session: AsyncSession, *, user_id: UUID, idp_su
     )
 
 
+async def _request_idp_status_sync(session: AsyncSession, user: User) -> None:
+    """LLD-01 §11.3: "The command handler disables the Keycloak user and logs
+    out their Keycloak sessions." Without it a disabled user's Keycloak SSO
+    session outlives their BFF sessions.
+
+    Carries no target state: the handler applies the user's status as it is
+    when the command runs, so a quick disable/reactivate pair converges on
+    the latest status whichever command runs last."""
+    envelope = build_envelope(
+        event_type="user.idp_status_sync_requested",
+        source="users-svc",
+        subject=str(user.id),
+        data={"user_id": str(user.id)},
+        schema_version="1.0",
+        aggregate_type="user",
+        aggregate_version=user.version,
+    )
+    await add_to_outbox(
+        session,
+        envelope,
+        exchange="sf.commands",
+        routing_key="user.idp_status_sync_requested.v1",
+        aggregate_id=str(user.id),
+        notify_channel=_NOTIFY_CHANNEL,
+    )
+
+
 async def get_self(session: AsyncSession, user_id: UUID) -> User | None:
     return await repository.get_by_id(session, user_id)
 
@@ -218,6 +245,7 @@ async def disable_user(
     await _emit(
         session, user, event_type="user.disabled", routing_key="user.disabled.v1", reason=reason
     )
+    await _request_idp_status_sync(session, user)
     await _audit(
         session,
         user,
@@ -234,6 +262,7 @@ async def reactivate_user(session: AsyncSession, user_id: UUID, *, actor_id: UUI
     if user is None:
         raise UserNotFoundOrAlreadyInState(user_id)
     await _emit(session, user, event_type="user.reactivated", routing_key="user.reactivated.v1")
+    await _request_idp_status_sync(session, user)
     await _audit(
         session,
         user,

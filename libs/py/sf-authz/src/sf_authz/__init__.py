@@ -7,6 +7,7 @@ from .dependencies import (
     Public,
     install_enforcer,
     install_token_validator,
+    org_domain_from_path,
 )
 from .enforcer import PolicyEnforcer, build_enforcer
 from .route_coverage import RouteCoverageError, assert_routes_covered
@@ -28,4 +29,5 @@ __all__ = [
     "build_enforcer",
     "install_enforcer",
     "install_token_validator",
+    "org_domain_from_path",
 ]

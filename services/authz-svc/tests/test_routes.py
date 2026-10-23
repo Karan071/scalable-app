@@ -344,3 +344,39 @@ def test_the_orgs_svc_freshness_call_holds_no_db_connection(client: TestClient) 
 
     assert resp.status_code == 200, resp.text
     assert held_during_call == [0]
+
+
+def test_an_exhausted_request_pool_fails_fast_with_503_db_busy(client: TestClient) -> None:
+    """LLD-09 §2: pool_timeout 2 s, "fail fast -> 503 db-busy" -- the real
+    SQLAlchemy pool timeout, through a real route, not a 500 or a hang."""
+    import time
+
+    override_all_as(client.app, uuid7())
+    engine = client.app.state.session_factory.kw["bind"]
+
+    async def hold_every_connection() -> list:  # type: ignore[type-arg]
+        held = []
+        for _ in range(engine.pool.size() + engine.pool._max_overflow):
+            conn = engine.connect()
+            await conn.start()
+            held.append(conn)
+        return held
+
+    async def release(held: list) -> None:  # type: ignore[type-arg]
+        for conn in held:
+            await conn.close()
+
+    held = client.portal.call(hold_every_connection)
+    try:
+        started = time.monotonic()
+        busy = client.get("/v1/roles")
+        elapsed = time.monotonic() - started
+    finally:
+        client.portal.call(release, held)
+
+    assert busy.status_code == 503, busy.text
+    assert busy.json()["title"] == "db-busy"
+    assert busy.headers["retry-after"] == "1"
+    assert busy.json()["correlation_id"]
+    assert elapsed < 4.0  # ~pool_timeout, not a hang
+    assert client.get("/v1/roles").status_code == 200  # recovers once connections free up

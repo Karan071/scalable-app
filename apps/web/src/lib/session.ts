@@ -81,14 +81,11 @@ export function navigateToStepUp(returnTo: string): void {
 
 export async function navigateToLogout(): Promise<void> {
   // A plain <form> POST can't carry the X-CSRF-Token header the BFF
-  // requires. `fetch` (default redirect: 'follow') runs the whole chain
-  // itself -- BFF deletes the local session, then 303s to Keycloak's
-  // end-session endpoint (which terminates the IdP session server-side via
-  // `id_token_hint`, not needing the browser's own Keycloak cookie), which
-  // 302s back to `post_logout_redirect_uri` (the app origin). `resp.url`
-  // reflects that final resting URL even though the fetched body itself is
-  // discarded -- a real top-level navigation there completes logout
-  // visibly, matching what a form submission would have shown.
+  // requires. The BFF deletes the local session, ends the Keycloak session
+  // server-side (no token ever comes to the browser, LLD-01 §8), and 303s
+  // to `/`. `fetch` follows that; `resp.url` is where it landed, and a real
+  // top-level navigation there completes logout visibly, matching what a
+  // form submission would have shown.
   const resp = await fetch('/auth/logout', {
     method: 'POST',
     credentials: 'same-origin',

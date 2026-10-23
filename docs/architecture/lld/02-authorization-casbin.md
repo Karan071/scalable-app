@@ -138,6 +138,11 @@ Every route declares exactly one of:
 
 At startup the app **fails to start** if any route lacks a declaration (the route-coverage guard). CI runs the same check.
 
+**As built.**
+- **Org domain:** org-scoped routes take their domain from `org_domain_from_path()`.
+- **Metadata:** the guard publishes each operation's declaration in OpenAPI as `x-sf-authz` (marker, resource, action, domain). The generated security suites read it (LLD-14 §4).
+- **FastAPI 0.14x:** included routers are no longer flattened into `app.routes`, so the guard walks FastAPI's effective routes (`iter_route_contexts`). Until 2026-10-24 it iterated `app.routes` and silently checked none of the services' routes. Checked: none was undeclared.
+
 ```mermaid
 flowchart TD
   A[Request] --> B{Bearer JWT valid?<br/>sig, iss, aud, exp, alg}

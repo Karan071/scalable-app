@@ -137,7 +137,16 @@ class PolicyWatcher:
             await asyncio.sleep(self._poll_interval_s)
             try:
                 version = await self._enforcer.fetch_version_only()
-                self._signal(version)
+                if not self._enforcer.confirm_current(version):
+                    if version < self._enforcer.current_version:
+                        # No epoch handling yet (LLD-02 §7): staleness grows
+                        # until restart, so enforcement fails closed.
+                        logger.warning(
+                            "policy_version went backwards (%s < %s); not confirming freshness",
+                            version,
+                            self._enforcer.current_version,
+                        )
+                    self._signal(version)
             except asyncio.CancelledError:
                 raise
             except Exception:

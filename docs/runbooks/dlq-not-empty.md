@@ -50,9 +50,9 @@ rate and which consumer.
 
 ## Known local-dev noise
 
-Service test suites start real consumers on the shared dev broker, with
-Keycloak pointed at an unreachable test host. They dead-letter Keycloak
-commands (`user.idp_sync_requested`, `identity.mfa_group_sync_requested`)
-into `q.users.commands.dlq` and `q.authz.commands.dlq` on every run, and
-can also pick up commands your dev servers produced. Locally, peek first;
-if every message is a test artifact, purge.
+Service test suites point Keycloak at an unreachable test host, so they
+dead-letter Keycloak commands (`user.idp_sync_requested`,
+`user.idp_status_sync_requested`, `identity.mfa_group_sync_requested`).
+They run on the `scaleforge-test` vhost, which `make test-env` rebuilds,
+so these never reach the dev DLQs. A dev DLQ message came from your dev
+servers: peek before purging.

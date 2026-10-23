@@ -1,4 +1,5 @@
-"""Keycloak Admin REST API client for setting ``sf_uid`` (LLD-01 §11.2).
+"""Keycloak Admin REST API client: ``sf_uid`` (LLD-01 §11.2) and the
+enabled flag that follows the user's status (§11.3).
 
 ``sf-bff``'s ``sf_uid`` protocol mapper reads this user attribute. Without
 it, every access token this user ever gets is permanently missing the claim
@@ -10,6 +11,13 @@ had ever set the attribute (2026-10-18).
 import time
 
 import httpx
+
+# User fields a profile update must carry back so Keycloak doesn't clear them.
+_PROFILE_FIELDS = ("username", "email", "emailVerified", "firstName", "lastName", "enabled")
+
+
+class KeycloakUserNotFound(Exception):
+    pass
 
 
 class KeycloakAdminClient:
@@ -48,19 +56,56 @@ class KeycloakAdminClient:
         return self._cached_token
 
     async def set_sf_uid(self, *, keycloak_user_id: str, sf_uid: str) -> None:
-        """Idempotent. Keycloak's user-update PUT replaces the whole
-        ``attributes`` map, not just the key sent, so this merges locally
-        first rather than clobbering any other attribute."""
-        token = await self._get_token()
-        headers = {"Authorization": f"Bearer {token}"}
-        url = f"{self._admin_base_url}/users/{keycloak_user_id}"
-
-        get_resp = await self._http.get(url, headers=headers)
-        get_resp.raise_for_status()
-        user = get_resp.json()
-
+        """Idempotent."""
+        user = await self._get_user(keycloak_user_id)
+        if user is None:
+            raise KeycloakUserNotFound(keycloak_user_id)
         attributes = user.get("attributes") or {}
         attributes["sf_uid"] = [sf_uid]
+        await self._put_user(user, attributes=attributes)
 
-        put_resp = await self._http.put(url, headers=headers, json={"attributes": attributes})
-        put_resp.raise_for_status()
+    async def sync_enabled(self, *, keycloak_user_id: str, enabled: bool) -> bool:
+        """LLD-01 §11.3: enables or disables the Keycloak user; disabling
+        also ends their Keycloak sessions, so SSO can't sign them back in.
+        Idempotent. Returns False if Keycloak has no such user (nothing left
+        to sign in with, so nothing to do)."""
+        user = await self._get_user(keycloak_user_id)
+        if user is None:
+            return False
+        if user.get("enabled") != enabled:
+            await self._put_user(user, enabled=enabled)
+        if not enabled:
+            headers = await self._headers()
+            resp = await self._http.post(
+                f"{self._user_url(keycloak_user_id)}/logout", headers=headers
+            )
+            resp.raise_for_status()
+        return True
+
+    def _user_url(self, keycloak_user_id: str) -> str:
+        return f"{self._admin_base_url}/users/{keycloak_user_id}"
+
+    async def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {await self._get_token()}"}
+
+    async def _get_user(self, keycloak_user_id: str) -> dict | None:
+        resp = await self._http.get(self._user_url(keycloak_user_id), headers=await self._headers())
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()  # type: ignore[no-any-return]
+
+    async def _put_user(self, user: dict, **changes: object) -> None:
+        """Sends the user's whole profile back with ``changes`` applied:
+        under Keycloak 26's declarative user profile, email and names are
+        profile attributes too, and a PUT that omits them clears them.
+        (Sending only ``attributes`` wiped every user's profile on first
+        login: the next login was blocked on "Update profile", and tokens
+        carried no email. See test_keycloak_admin_live.py.)"""
+        profile = {key: user[key] for key in _PROFILE_FIELDS if key in user}
+        if "attributes" in user:
+            profile["attributes"] = user["attributes"]
+        resp = await self._http.put(
+            self._user_url(user["id"]), headers=await self._headers(), json={**profile, **changes}
+        )
+        resp.raise_for_status()

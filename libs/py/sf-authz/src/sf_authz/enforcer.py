@@ -66,16 +66,31 @@ class PolicyEnforcer:
         self._model_path = model_path
         self._engine = sync_engine
         self._snapshot: _Snapshot | None = None
+        # LLD-02 §8 last_confirmed_at: a reload *or* a poll that found the
+        # loaded version still current. Staleness is measured from here.
+        self._confirmed_at = 0.0
 
     def load(self) -> None:
         """Synchronous initial load. Call once at startup, before readiness."""
         self._snapshot = self._load_snapshot()
+        self._confirmed_at = self._snapshot.loaded_at
 
     async def reload(self) -> int:
         """Build a fresh snapshot in a thread, then swap. Returns the new version."""
         snapshot = await asyncio.to_thread(self._load_snapshot)
         self._snapshot = snapshot
+        self._confirmed_at = snapshot.loaded_at
         return snapshot.version
+
+    def confirm_current(self, version: int) -> bool:
+        """A poll found ``policy_version`` at ``version``. If that's the loaded
+        version, this enforcer is provably current: reset staleness. Any
+        other version is not a confirmation -- newer means a reload is due;
+        older means the DB went backwards (e.g. a restore), so fail closed."""
+        if version != self._require_snapshot().version:
+            return False
+        self._confirmed_at = time.monotonic()
+        return True
 
     def _load_snapshot(self) -> _Snapshot:
         # ``create_all_models=False``: the ``casbin_rule`` table is owned by
@@ -153,7 +168,9 @@ class PolicyEnforcer:
         return self._require_snapshot().version
 
     def staleness_s(self) -> float:
-        return time.monotonic() - self._require_snapshot().loaded_at
+        """Seconds since this enforcer was last known current (LLD-02 §8)."""
+        self._require_snapshot()
+        return time.monotonic() - self._confirmed_at
 
     def _require_snapshot(self) -> _Snapshot:
         if self._snapshot is None:

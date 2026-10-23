@@ -63,6 +63,23 @@
 | Rate limits | Each class: exceed → 429 + headers; consistent across replicas; XFF spoofing ignored | Pass |
 | Webhooks | Invalid signature, replay, stale timestamp, oversize | Rejected, no state change |
 
+**As built (M2, 2026-10-24).**
+
+- **Tenant-isolation matrix:** `tests/system/test_tenant_isolation.py`, run by `make test-system`.
+  - **Route metadata:** `sf_authz.assert_routes_covered` publishes every operation's guard in OpenAPI as `x-sf-authz`. The test reads `/openapi.json` from the running services and takes every `Authorize(..., domain="org:{org_id}")` route. New routes join the matrix without editing the test.
+  - **Request values:** path, header and body values are filled from the OpenAPI parameters. A required parameter the matrix can't fill fails loudly.
+  - **Actors and shapes:** the six actors and three shapes above. "Without the role" is a `catalog_manager`; the test checks that this role really lacks each route's permission.
+  - **Pass criteria:**
+    - 403/404 for every cell.
+    - A foreign ID that appears only in the body (e.g. `membership_id` when assigning a role) may also get 409/422. That is the same answer as for an unknown ID.
+    - No org's memberships, invitations or role assignments change.
+    - Reads by an admin in their own org must return 200 (positive control).
+  - **Not in the matrix:** `POST .../members/me:leave` is self-scoped and has its own test.
+  - **Shown to fail:** two deliberate breaks were each caught.
+    - Dropping the `org_id` filter on membership updates: the admin of another org removed a member.
+    - Skipping `Authorize`'s suspended-org check: the suspended org's admin got 200s.
+- **Token leakage:** the BFF-response scan is in `tests/system/test_bff_login.py`. The Playwright browser-storage half waits for the web E2E suite.
+
 ## 5. Concurrency tests
 
 The harness uses async workers released together by a barrier (`asyncio.Event`), N runs per test (default 20). It asserts **invariants via SQL afterwards**, not only responses.

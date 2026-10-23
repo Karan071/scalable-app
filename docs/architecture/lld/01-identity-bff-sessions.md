@@ -75,6 +75,20 @@ Realm `scaleforge` is managed as code: a version-controlled realm configuration 
   - the user is in group `mfa-required` (all users holding any `platform` role or `org_admin`); or
   - the user has configured a second factor (opt-in for customers, FR-AUTH-05).
 - **ACR / Level of Authentication mapping:** `acr=1` password; `acr=2` MFA. The BFF can request `acr_values=2` for step-up (§9).
+- **As built (Keycloak 26.0.8, `deploy/compose/keycloak/realm-scaleforge.json`, 2026-10-24):** realm attribute `acr.loa.map = {"1": 1, "2": 2}`; browser flow `sf-browser`:
+
+  ```text
+  sf-browser                   cookie | sf-browser-forms              (ALTERNATIVE)
+  sf-browser-forms             sf-level-1 | sf-level-2                (CONDITIONAL)
+    sf-level-1   LoA 1, max age 10 h: password form,
+                 then sf-mfa-enforced (role mfa_required → OTP)
+                 or   sf-mfa-opt-in   (not mfa_required, OTP configured → OTP)
+    sf-level-2   LoA 2, max age 0:    OTP form
+  ```
+
+  The group `mfa-required` carries the realm role `mfa_required`, which the conditions test (Keycloak has no group condition). A member without OTP is sent to OTP enrollment at login. Level 2's max age 0 means every step-up asks for the OTP again; the SSO session satisfies level 1, so the password is not asked again.
+  - **Limitation:** Keycloak 26.0 has no "sub-flow executed" condition, so MFA done at login (inside level 1) still yields `acr=1`. A group member therefore enters an OTP at login and again at their first step-up. This is safe (privileged routes check `acr ≥ 2` anyway, §9) and costs one extra OTP per session. Revisit when Keycloak adds that condition.
+  - **Evidence:** `tests/system/test_bff_login.py` runs these flows against this realm through two BFF replicas.
 - **Brute-force detection:** on (temporary lockout with backoff), complementing BFF rate limits.
 - **Passwords:** password policy plus a breached-password check if available. Email verification required.
 - **Event logging:** user events (LOGIN, LOGIN_ERROR, LOGOUT, UPDATE_TOTP, …) and admin events enabled **without representations**, so payloads with secrets are never logged.
@@ -238,7 +252,7 @@ The lock only prevents duplicate refreshes. Correctness does not depend on it: K
 
 | Trigger | Mechanism | Effect |
 | --- | --- | --- |
-| User logout `POST /auth/logout` (CSRF) | Delete session + index entries → 303 to Keycloak `end_session_endpoint` with `id_token_hint` and the exact `post_logout_redirect_uri` | Local and IdP session ended |
+| User logout `POST /auth/logout` (CSRF) | Delete session + index entries → end the Keycloak session server-side (POST the session's refresh token to `end_session_endpoint` with client authentication; best effort, logged on failure) → 303 to `/` | Local and IdP session ended |
 | Logout everywhere `POST /auth/logout-all` | `SMEMBERS user_sessions:{uid}` → delete all; Keycloak admin logout of the user's sessions (through users-svc) | All devices |
 | Back-channel logout from Keycloak | `POST /auth/backchannel-logout` with a `logout_token`: validate sig, iss, aud=`sf-bff`, iat (±60 s), `events` claim, no `nonce`, `jti` not seen (store `bcl:jti:{jti}` EX 600) → delete via `idp_sid:` index or all of `sub`'s sessions | IdP-initiated logout honored |
 | Admin disables a user | users-svc → Keycloak disable + logout; publishes `user.disabled` → BFF consumer deletes all sessions | ≤ 5 s target |
@@ -246,6 +260,8 @@ The lock only prevents duplicate refreshes. Correctness does not depend on it: K
 | Refresh `invalid_grant` | Session deleted, 401 | Detects revoked IdP session or replay |
 
 The revocation effect is immediate on the next request after the key is deleted. Session validation always reads Redis; there is no in-process session cache.
+
+**Amended 2026-10-24 (logout row).** This row originally redirected the browser to `end_session_endpoint` with `id_token_hint`. That puts the ID token in the browser's URL, history and the IdP's access logs, which §16 forbids ("no token material in any BFF response body or header"). The system test caught it. A server-side end-session has the same effect without the token leaving the BFF. It also needs no Keycloak confirmation page and no cross-origin hop from the SPA's `fetch`.
 
 ## 9. MFA and step-up (FR-AUTH-05, SEC-15)
 
@@ -256,8 +272,10 @@ The revocation effect is immediate on the next request after the key is deleted.
   1. A route declares `step_up(acr=2, max_age=600)`.
   2. When unmet, the BFF responds `401 application/problem+json` with type `…/step-up-required`.
   3. The SPA navigates to `/auth/step-up?return_to=…`.
-  4. The BFF runs the login flow with `acr_values=2` and `max_age=0` (`prompt=login`).
-  5. On callback, the BFF verifies `acr` and `auth_time`, updates the session, and **rotates the session ID**.
+  4. The BFF runs the login flow with `acr_values=2`. The realm's level-2 max age of 0 (§3.3) makes Keycloak ask for the second factor every time.
+  5. On callback, the BFF verifies `acr ≥ 2` and that `auth_time` is strictly newer than the session's, updates the session, and **rotates the session ID**. Both times come from Keycloak, so clock skew can't affect the check.
+
+  *Amended 2026-10-24 (step 4):* it originally also sent `max_age=0` (`prompt=login`). With LoA flows, that makes Keycloak redo every level, so a group member typed their password and two OTPs on each step-up. Step 5's `auth_time` check gives the freshness guarantee `max_age=0` was there for.
 - **Services also check:** privileged endpoints in services require `acr ≥ 2` in the forwarded access token. The BFF is not the only check.
 
 ## 10. BFF API surface (auth)
@@ -310,8 +328,8 @@ stateDiagram-v2
 | Transition | Side effects (one transaction + outbox) |
 | --- | --- |
 | provision | Insert user. Set Keycloak attribute `sf_uid` (sync admin call, idempotent; retried by the outbox command `user.idp_sync_requested` if it fails). Emit `user.created`. Authz grants `role:customer` in domain `customer` (consumer of `user.created`). |
-| disable | Status update. Emit `user.disabled`. The command handler disables the Keycloak user and logs out their Keycloak sessions. BFF and authz consumers revoke sessions and suspend role assignments. |
-| reactivate | Emit `user.reactivated`. Keycloak user enabled. Role assignments are **not** auto-restored; an admin re-grants them (safer default). |
+| disable | Status update. Emit `user.disabled`. The command handler (`user.idp_status_sync_requested`) disables the Keycloak user and logs out their Keycloak sessions. BFF and authz consumers revoke sessions and suspend role assignments. |
+| reactivate | Emit `user.reactivated`. Keycloak user enabled (same command; the handler applies the user's status at the time it runs, so a quick disable/reactivate pair converges on the latest). Role assignments are **not** auto-restored; an admin re-grants them (safer default). |
 | anonymize | Null out PII. Replace email with `anon-{id}@invalid`. Delete the Keycloak user. Keep the ID for order/audit referential history. |
 
 ### 11.3 APIs
@@ -402,4 +420,4 @@ FR-AUTH-01..08; PRD §3.1, §3.2; SEC-01, SEC-04, SEC-07 (cookie Secure / TLS), 
 | --- | --- |
 | private_key_jwt for `sf-bff` client authentication in staging (instead of a client secret) | Security |
 | Decide whether customers can opt into WebAuthn passkeys in v1 | Product |
-| Confirm Keycloak version and the LoA/step-up configuration syntax at M2 start | Identity |
+| ~~Confirm Keycloak version and the LoA/step-up configuration syntax at M2 start~~ Resolved 2026-10-24: Keycloak 26.0.8; see §3.3 "As built" | Identity |

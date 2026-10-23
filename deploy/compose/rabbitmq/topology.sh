@@ -72,9 +72,11 @@ bind sf.events q.orgs.users user.disabled.v1
 queue_with_dlq q.authz.commands
 bind sf.commands q.authz.commands identity.mfa_group_sync_requested.v1
 
-# q.users.commands (E2.8, LLD-01 §11.2): users-svc self-consumes the retry
-# of a failed synchronous Keycloak sf_uid sync.
+# q.users.commands (E2.8, LLD-01 §11.2-§11.3): users-svc self-consumes the
+# retry of a failed synchronous Keycloak sf_uid sync, and the Keycloak
+# enable/disable that follows a user's status.
 queue_with_dlq q.users.commands
 bind sf.commands q.users.commands user.idp_sync_requested.v1
+bind sf.commands q.users.commands user.idp_status_sync_requested.v1
 
 echo "topology: vhost '$VHOST' declared"

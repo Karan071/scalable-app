@@ -89,7 +89,14 @@ Epics are planning units, not tickets. Each epic cites the design section that g
 
 **Exit evidence:** secure login with MFA through the BFF. No tokens reach the browser (automated check). Sessions work across 2 BFF replicas. Logout and admin revocation are verified. The tenant-isolation suite passes. Role-revocation latency is measured against its target (LLD-02 §8).
 
-**Evidence so far:** role-revocation latency measured 2026-10-23 with all three LLD-02 §8 targets met (p99: direct 0.27 s, membership-disabled 0.31 s, watcher-off 10.1 s) — [report](reports/perf/2026-10-23-revocation-latency.md), reproducible with `make test-revocation-latency`.
+**Evidence so far:**
+- **Role-revocation latency**, measured 2026-10-23: all three LLD-02 §8 targets met (p99: direct 0.27 s, membership-disabled 0.31 s, watcher-off 10.1 s). See the [report](reports/perf/2026-10-23-revocation-latency.md); reproduce with `make test-revocation-latency`.
+- **Login, MFA, replicas, logout, admin revocation** (2026-10-24, `make test-system`, `tests/system/test_bff_login.py`). These run against the real Keycloak and two BFF replicas:
+  - MFA enrollment at login for the `mfa-required` group; step-up to `acr=2` with one OTP.
+  - Sessions work on both replicas, and logout on one ends them on both and in Keycloak.
+  - Admin disable revokes every session within LLD-01 §8's 5 s and blocks the next login.
+- **No tokens reach the browser** (same file): no token in any BFF response, and Redis holds them encrypted. The Playwright browser-storage check (LLD-14 §4) waits for the web E2E suite.
+- **Tenant isolation** (2026-10-24, `make test-system`, `tests/system/test_tenant_isolation.py`): 14 org routes, 154 cells, zero 2xx. The matrix is generated from route metadata (LLD-14 §4).
 
 > **Deviation from the PRD milestone table:** the PRD lists messaging under M4. M2 introduces RabbitMQ and the transactional outbox **only** for identity events (membership/role changes → policy, audit). Doing this in M2 avoids building a synchronous revocation path that M4 would then throw away. Retry tiers, DLQ tooling, and sagas stay in M4.
 

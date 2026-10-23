@@ -60,10 +60,14 @@ class FakeSessions:
 
 
 class FakeOidc:
-    def end_session_url(self, *, id_token: str, post_logout_redirect_uri: str) -> str:
-        return (
-            f"https://kc.test/logout?id_token_hint={id_token}&redirect={post_logout_redirect_uri}"
-        )
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.ended: list[str] = []
+
+    async def end_session(self, *, refresh_token: str) -> None:
+        if self.fail:
+            raise httpx.ConnectError("keycloak down")
+        self.ended.append(refresh_token)
 
 
 def _client(record: SessionRecord | None) -> TestClient:
@@ -116,6 +120,38 @@ def test_logout_with_the_correct_csrf_token_is_accepted() -> None:
     )
 
     assert resp.status_code == 303
+
+
+def test_logout_ends_the_keycloak_session_server_side() -> None:
+    """LLD-01 §16: the ID token never reaches the browser, so logout can't
+    be a redirect carrying ``id_token_hint``."""
+    client = _client(_record())
+    token = derive_csrf_token(_CSRF_SECRET)
+
+    resp = client.post(
+        "/auth/logout",
+        headers={"origin": "https://app.test", "x-csrf-token": token},
+        follow_redirects=False,
+    )
+
+    assert resp.headers["location"] == "/"
+    assert real_app.state.oidc.ended == ["rt-1"]
+    assert real_app.state.sessions.deleted == [_SESSION_ID]
+
+
+def test_logout_succeeds_locally_when_keycloak_is_down() -> None:
+    client = _client(_record())
+    real_app.state.oidc = FakeOidc(fail=True)
+    token = derive_csrf_token(_CSRF_SECRET)
+
+    resp = client.post(
+        "/auth/logout",
+        headers={"origin": "https://app.test", "x-csrf-token": token},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    assert real_app.state.sessions.deleted == [_SESSION_ID]
 
 
 def test_logout_from_a_cross_origin_referer_is_rejected_even_with_a_valid_token() -> None:

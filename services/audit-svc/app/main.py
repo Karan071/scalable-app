@@ -21,7 +21,7 @@ from sf_common import (
     install_problem_details,
     instrument_fastapi_app,
 )
-from sf_db import worker_pool
+from sf_db import POOL_TIMEOUT_ERRORS, worker_pool
 from sf_messaging import DEFAULT_HANDLER_CONCURRENCY, InboxConsumer
 from sqlalchemy import text
 
@@ -111,7 +111,7 @@ async def _consumer_ready() -> bool:
 
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
-install_problem_details(app)
+install_problem_details(app, db_busy_errors=POOL_TIMEOUT_ERRORS)
 app.include_router(build_health_router(readiness_checks=[_db_ready, _authz_ready, _consumer_ready]))
 app.include_router(router)
 assert_routes_covered(app)

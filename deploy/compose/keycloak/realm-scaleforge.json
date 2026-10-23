@@ -39,26 +39,236 @@
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": false,
   "defaultSignatureAlgorithm": "RS256",
+  "attributes": {
+    "acr.loa.map": "{\"1\": 1, \"2\": 2}"
+  },
+  "roles": {
+    "realm": [
+      {
+        "name": "mfa_required",
+        "description": "Granted only via the mfa-required group; forces OTP at login (LLD-01 §3.3)."
+      }
+    ]
+  },
   "groups": [
     {
-      "name": "mfa-required"
+      "name": "mfa-required",
+      "realmRoles": [
+        "mfa_required"
+      ]
     }
   ],
+  "authenticationFlows": [
+    {
+      "alias": "sf-browser",
+      "description": "LLD-01 §3.3: SSO cookie, or the forms flow below.",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "auth-cookie"
+        },
+        {
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "sf-browser-forms"
+        }
+      ]
+    },
+    {
+      "alias": "sf-browser-forms",
+      "description": "Level of Authentication 1 (acr=1) then 2 (acr=2, step-up only).",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "sf-level-1"
+        },
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "sf-level-2"
+        }
+      ]
+    },
+    {
+      "alias": "sf-level-1",
+      "description": "Password, plus login-time MFA when enforced (mfa-required group) or opted into.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-level-of-authentication",
+          "authenticatorConfig": "sf-loa-1"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "auth-username-password-form"
+        },
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "sf-mfa-enforced"
+        },
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 40,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "sf-mfa-opt-in"
+        }
+      ]
+    },
+    {
+      "alias": "sf-mfa-enforced",
+      "description": "mfa-required group (via role mfa_required): OTP, enrolling first if needed.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-user-role",
+          "authenticatorConfig": "sf-cond-mfa-role"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "auth-otp-form"
+        }
+      ]
+    },
+    {
+      "alias": "sf-mfa-opt-in",
+      "description": "Everyone else: OTP only if they configured one (FR-AUTH-05 opt-in).",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-user-role",
+          "authenticatorConfig": "sf-cond-not-mfa-role"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-user-configured"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 30,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "auth-otp-form"
+        }
+      ]
+    },
+    {
+      "alias": "sf-level-2",
+      "description": "Step-up (acr_values=2): always a fresh OTP. The only path to acr=2.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-level-of-authentication",
+          "authenticatorConfig": "sf-loa-2"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "auth-otp-form"
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "sf-loa-1",
+      "config": {
+        "loa-condition-level": "1",
+        "loa-max-age": "36000"
+      }
+    },
+    {
+      "alias": "sf-loa-2",
+      "config": {
+        "loa-condition-level": "2",
+        "loa-max-age": "0"
+      }
+    },
+    {
+      "alias": "sf-cond-mfa-role",
+      "config": {
+        "condUserRole": "mfa_required",
+        "negate": "false"
+      }
+    },
+    {
+      "alias": "sf-cond-not-mfa-role",
+      "config": {
+        "condUserRole": "mfa_required",
+        "negate": "true"
+      }
+    }
+  ],
+  "browserFlow": "sf-browser",
   "clientScopes": [
     {
       "name": "users:provision",
       "protocol": "openid-connect",
-      "description": "users-svc POST /internal/v1/users:provision (LLD-01 \u00a711.3)"
+      "description": "users-svc POST /internal/v1/users:provision (LLD-01 §11.3)"
     },
     {
       "name": "users:read",
       "protocol": "openid-connect",
-      "description": "users-svc GET /internal/v1/users:batch (LLD-01 \u00a711.3)"
+      "description": "users-svc GET /internal/v1/users:batch (LLD-01 §11.3)"
     },
     {
       "name": "orgs:read",
       "protocol": "openid-connect",
-      "description": "orgs-svc GET /internal/v1/memberships/{id} (LLD-03 \u00a78, LLD-02 \u00a77)"
+      "description": "orgs-svc GET /internal/v1/memberships/{id} (LLD-03 §8, LLD-02 §7)"
     }
   ],
   "clients": [

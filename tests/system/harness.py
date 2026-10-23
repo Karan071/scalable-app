@@ -6,7 +6,8 @@ isolated test environment from `make test-env`. No production code changes:
 
 - A fake OIDC IdP (JWKS + client-credentials token endpoint) stands in for
   Keycloak. Services validate its tokens exactly as they would Keycloak's,
-  because issuer and JWKS URI are ordinary settings.
+  because issuer and JWKS URI are ordinary settings. Browser-login tests
+  use the real Compose Keycloak instead (keycloak.py).
 - Telemetry export is disabled (OTEL_SDK_DISABLED) so test processes never
   report into the dev Collector under dev service names.
 """
@@ -21,13 +22,16 @@ import time
 from collections.abc import Awaitable, Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import parse_qs
-from uuid import UUID
+from uuid import UUID, uuid7
 
+import asyncpg
 import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
+from sf_common import TokenCipher
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOG_DIR = REPO_ROOT / ".local" / "system-tests"
@@ -38,6 +42,7 @@ TEST_REDIS_CACHE_URL = "redis://localhost:6380/1"
 # Invitation tokens are encrypted with this key so the harness can read them
 # back from the outbox, the only place they exist besides the invitee's email.
 INVITATION_KEYS = {"k1": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}
+_invitation_cipher = TokenCipher.from_base64_keys(INVITATION_KEYS, "k1")
 
 _ISSUER = "http://fake-idp.test/realms/scaleforge"
 _KID = "system-test-key"
@@ -56,7 +61,8 @@ ENV = _dotenv()
 
 
 class FakeIdP:
-    """JWKS + client-credentials token endpoint on 127.0.0.1.
+    """JWKS + client-credentials token endpoint on 127.0.0.1, plus a stub of
+    the few Keycloak admin calls services make (they always succeed).
 
     ``token_delay_s`` makes the token endpoint answer slowly, standing in for
     a degraded Keycloak (LLD-13 FS-3, slow dependency).
@@ -76,9 +82,20 @@ class FakeIdP:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802 (stdlib API)
-                self._reply(jwks_body)
+                if self.path.startswith("/admin/"):
+                    # Keycloak admin "get user", enough for users-svc's sf_uid sync.
+                    user_id = self.path.rsplit("/", 1)[-1]
+                    self._reply(json.dumps({"id": user_id, "attributes": {}}).encode())
+                else:
+                    self._reply(jwks_body)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                self._no_content()
 
             def do_POST(self) -> None:  # noqa: N802
+                if self.path.startswith("/admin/"):
+                    self._no_content()
+                    return
                 with idp._lock:
                     idp.tokens_in_flight += 1
                     idp.max_tokens_in_flight = max(idp.max_tokens_in_flight, idp.tokens_in_flight)
@@ -94,6 +111,11 @@ class FakeIdP:
                         {"access_token": idp.service_token(client_id), "expires_in": 300}
                     ).encode()
                 )
+
+            def _no_content(self) -> None:
+                self.rfile.read(int(self.headers.get("content-length") or 0))
+                self.send_response(204)
+                self.end_headers()
 
             def _reply(self, body: bytes) -> None:
                 self.send_response(200)
@@ -112,6 +134,17 @@ class FakeIdP:
 
     def stop(self) -> None:
         self._httpd.shutdown()
+
+    def idp_env(self, service: str) -> dict[str, str]:
+        return {
+            "SF_OIDC_ISSUER": self.issuer,
+            "SF_OIDC_JWKS_URI": f"{self.base_url}/jwks",
+            "SF_OIDC_TOKEN_ENDPOINT": f"{self.base_url}/token",
+            # Unused by these flows (no MFA-required role is granted), but required.
+            "SF_KEYCLOAK_ADMIN_BASE_URL": f"{self.base_url}/admin/realms/scaleforge",
+            "SF_KEYCLOAK_ADMIN_CLIENT_SECRET": "unused",
+            "SF_SVC_AUTHZ_CLIENT_SECRET": "unused",
+        }
 
     def _sign(self, claims: dict[str, object]) -> str:
         now = int(time.time())
@@ -132,17 +165,23 @@ class FakeIdP:
             }
         )
 
-    def service_token(self, client_id: str) -> str:
+    def service_token(self, client_id: str, *, scope: str = "orgs:read users:read") -> str:
         return self._sign(
             {
                 "sub": f"service-account-{client_id}",
                 "aud": "scaleforge-internal",
-                "scope": "orgs:read users:read",
+                "scope": scope,
             }
         )
 
 
-def service_env(service: str, idp: FakeIdP, **overrides: str) -> dict[str, str]:
+class IdP(Protocol):
+    def idp_env(self, service: str) -> dict[str, str]:
+        """The OIDC and Keycloak-admin settings ``service`` needs."""
+        ...
+
+
+def service_env(service: str, idp: IdP, **overrides: str) -> dict[str, str]:
     short = service.removesuffix("-svc")
     env = {
         **os.environ,
@@ -152,20 +191,14 @@ def service_env(service: str, idp: FakeIdP, **overrides: str) -> dict[str, str]:
         "SF_DB_USER": f"svc_{short}",
         "SF_DB_PASSWORD": ENV["POSTGRES_APP_PASSWORD"],
         "SF_AUTHZ_READER_DB_PASSWORD": ENV["POSTGRES_APP_PASSWORD"],
-        "SF_OIDC_ISSUER": idp.issuer,
-        "SF_OIDC_JWKS_URI": f"{idp.base_url}/jwks",
-        "SF_OIDC_TOKEN_ENDPOINT": f"{idp.base_url}/token",
         "SF_REDIS_CACHE_URL": TEST_REDIS_CACHE_URL,
         "SF_RABBITMQ_VHOST": TEST_VHOST,
         "SF_RABBITMQ_USER": ENV["SF_RABBITMQ_USER"],
         "SF_RABBITMQ_PASSWORD": ENV["SF_RABBITMQ_PASSWORD"],
         "SF_INVITATION_ENC_KEYS": json.dumps(INVITATION_KEYS),
         "SF_INVITATION_ENC_PRIMARY_KID": "k1",
-        # Unused by these flows (no MFA-required role is granted), but required.
-        "SF_KEYCLOAK_ADMIN_BASE_URL": f"{idp.base_url}/admin/realms/scaleforge",
-        "SF_KEYCLOAK_ADMIN_CLIENT_SECRET": "unused",
-        "SF_SVC_AUTHZ_CLIENT_SECRET": "unused",
         "OTEL_SDK_DISABLED": "true",
+        **idp.idp_env(service),
     }
     env.update(overrides)
     return env
@@ -224,6 +257,50 @@ class ServiceProcess:
                 self._proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+
+
+async def invitation_token(org_id: str, email: str) -> str:
+    """The newest invitation token sent to ``email`` for ``org_id``, read
+    back from orgs-svc's outbox as the invitee would from their email."""
+    conn = await asyncpg.connect(
+        host="localhost", database=TEST_DB, user="svc_orgs", password=ENV["POSTGRES_APP_PASSWORD"]
+    )
+    try:
+        row = await conn.fetchrow(
+            "SELECT payload FROM orgs.outbox WHERE payload->>'type' = 'invitation.created' "
+            "AND payload->'data'->>'org_id' = $1 AND payload->'data'->>'email' = $2 "
+            "ORDER BY occurred_at DESC, id DESC LIMIT 1",
+            org_id,
+            email,
+        )
+    finally:
+        await conn.close()
+    data = json.loads(row["payload"])["data"]
+    return _invitation_cipher.decrypt(data["token_enc"], aad=data["invitation_id"].encode())
+
+
+async def existing_super_user() -> UUID | None:
+    conn = await asyncpg.connect(
+        host="localhost", database=TEST_DB, user="svc_authz", password=ENV["POSTGRES_APP_PASSWORD"]
+    )
+    try:
+        user_id = await conn.fetchval(
+            "SELECT user_id FROM authz.role_assignments "
+            "WHERE role_id = 'super_user' AND status = 'active' LIMIT 1"
+        )
+    finally:
+        await conn.close()
+    return user_id  # type: ignore[no-any-return]
+
+
+async def any_super_user() -> UUID:
+    """A super_user for fake-IdP tests: the test DB's one super_user if it
+    has one (bootstrap allows only one), else a new one."""
+    user_id = await existing_super_user()
+    if user_id is None:
+        user_id = uuid7()
+        bootstrap_super_user(user_id)
+    return user_id
 
 
 def bootstrap_super_user(user_id: UUID) -> None:

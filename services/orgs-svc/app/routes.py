@@ -26,7 +26,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sf_authz import AuthenticatedUser, Authorize, Internal, Principal
+from sf_authz import AuthenticatedUser, Authorize, Internal, Principal, org_domain_from_path
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,9 +46,7 @@ require_reactivate_platform_org = Authorize("platform_org", "reactivate", domain
 require_archive_platform_org = Authorize("platform_org", "archive", domain="platform")
 
 
-def _org_domain(request: Request) -> str:
-    return f"org:{request.path_params['org_id']}"
-
+_org_domain = org_domain_from_path()
 
 require_read_org_settings = Authorize("org_settings", "read", domain=_org_domain)
 require_update_org_settings = Authorize("org_settings", "update", domain=_org_domain)

@@ -87,6 +87,7 @@ def Internal(required_scope: str) -> Callable[[Request], Principal]:
         return principal
 
     dependency.sf_authz_marker = "internal"  # type: ignore[attr-defined]
+    dependency.sf_authz_scope = required_scope  # type: ignore[attr-defined]
     return dependency
 
 
@@ -122,6 +123,17 @@ def Public(rate_class: str) -> Callable[[], None]:
     return dependency
 
 
+def org_domain_from_path(param: str = "org_id") -> Callable[[Request], str]:
+    """The ``org:<id>`` domain, read from the URL path parameter ``param``."""
+
+    def resolve(request: Request) -> str:
+        return f"org:{request.path_params[param]}"
+
+    # Describes the resolver in route metadata (route_coverage.py).
+    resolve.sf_authz_domain = f"org:{{{param}}}"  # type: ignore[attr-defined]
+    return resolve
+
+
 def Authorize(
     resource: str,
     action: str,
@@ -133,8 +145,8 @@ def Authorize(
     """Full Casbin enforcement for a user-context route (LLD-02 §6 flowchart).
 
     ``domain`` is a fixed string (``"platform"``, ``"customer"``) or a
-    resolver reading the URL path (e.g. ``org:{org_id}``) — never headers,
-    the body, or the session (FR-ORG-05).
+    resolver reading the URL path (``org_domain_from_path()``) — never
+    headers, the body, or the session (FR-ORG-05).
     """
 
     def dependency(request: Request) -> Principal:
@@ -185,4 +197,8 @@ def Authorize(
     dependency.sf_authz_marker = "authorize"  # type: ignore[attr-defined]
     dependency.sf_authz_resource = resource  # type: ignore[attr-defined]
     dependency.sf_authz_action = action  # type: ignore[attr-defined]
+    dependency.sf_authz_domain = (  # type: ignore[attr-defined]
+        domain if isinstance(domain, str) else getattr(domain, "sf_authz_domain", "dynamic")
+    )
+    dependency.sf_authz_min_acr = min_acr  # type: ignore[attr-defined]
     return dependency

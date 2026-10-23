@@ -80,7 +80,7 @@ def test_provision_is_idempotent(client: TestClient) -> None:
     assert second["needs_claim_refresh"] is False
 
 
-async def _idp_sync_retry_rows(user_id: str) -> list[dict]:
+async def _outbox_commands(user_id: str, *, type_: str) -> list[dict]:
     from app.db import build_users_engine, build_users_session_factory
     from app.settings import Settings
 
@@ -91,18 +91,19 @@ async def _idp_sync_retry_rows(user_id: str) -> list[dict]:
             (
                 await session.execute(
                     text(
-                        "SELECT payload FROM outbox "
-                        "WHERE payload->>'type' = 'user.idp_sync_requested' "
-                        "AND payload->'data'->>'user_id' = :user_id"
+                        "SELECT payload, exchange, routing_key FROM outbox "
+                        "WHERE payload->>'type' = :type "
+                        "AND payload->'data'->>'user_id' = :user_id "
+                        "ORDER BY occurred_at, id"
                     ),
-                    {"user_id": user_id},
+                    {"type": type_, "user_id": user_id},
                 )
             )
             .mappings()
             .all()
         )
     await engine.dispose()
-    return [row["payload"] for row in rows]
+    return [{**row["payload"], "_route": (row["exchange"], row["routing_key"])} for row in rows]
 
 
 def test_provision_queues_an_idp_sync_retry_when_the_direct_keycloak_call_fails(
@@ -120,7 +121,7 @@ def test_provision_queues_an_idp_sync_retry_when_the_direct_keycloak_call_fails(
     assert response.status_code == 200
     user_id = response.json()["user_id"]
 
-    rows = asyncio.run(_idp_sync_retry_rows(user_id))
+    rows = asyncio.run(_outbox_commands(user_id, type_="user.idp_sync_requested"))
     assert len(rows) == 1
     assert rows[0]["data"]["idp_subject"] == body["idp_subject"]
     assert rows[0]["sfschemaversion"] == "1.0"
@@ -243,6 +244,23 @@ def test_disable_then_reactivate_platform_user(client: TestClient) -> None:
     reactivate_resp = client.post(f"/v1/platform/users/{provisioned['user_id']}:reactivate")
     assert reactivate_resp.status_code == 200, reactivate_resp.text
     assert reactivate_resp.json() == {"status": "active"}
+
+
+def test_disable_and_reactivate_each_queue_a_keycloak_status_sync(client: TestClient) -> None:
+    """LLD-01 §11.3: the Keycloak user follows the status change, through a
+    command written in the same transaction as the status change."""
+    import asyncio
+
+    user_id = client.post("/internal/v1/users:provision", json=_unique_identity()).json()["user_id"]
+    _as_platform_admin(client)
+    client.post(f"/v1/platform/users/{user_id}:disable", json={"reason": "fraud investigation"})
+    client.post(f"/v1/platform/users/{user_id}:reactivate")
+
+    rows = asyncio.run(_outbox_commands(user_id, type_="user.idp_status_sync_requested"))
+
+    assert len(rows) == 2
+    assert {row["_route"] for row in rows} == {("sf.commands", "user.idp_status_sync_requested.v1")}
+    assert rows[0]["data"] == {"user_id": user_id}
 
 
 def test_disable_platform_user_requires_reason(client: TestClient) -> None:

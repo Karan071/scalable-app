@@ -116,3 +116,30 @@ def test_domain_status_reflects_seeded_row(sync_engine: Engine) -> None:
         )
     enforcer = _enforcer(sync_engine)
     assert enforcer.domain_status("org:O1") == "suspended"
+
+
+def test_confirming_the_current_version_resets_staleness(sync_engine: Engine) -> None:
+    """LLD-02 §8: freshness is updated on a successful poll *or* reload. A
+    quiet system (no policy changes) must not drift into authz_stale."""
+    import time
+
+    enforcer = _enforcer(sync_engine)
+    time.sleep(0.05)
+    assert enforcer.staleness_s() >= 0.05
+
+    assert enforcer.confirm_current(enforcer.current_version) is True
+    assert enforcer.staleness_s() < 0.05
+
+
+def test_a_different_version_is_not_a_confirmation(sync_engine: Engine) -> None:
+    """Newer: this enforcer is behind until its reload lands. Older: the DB
+    went backwards (e.g. a restore) -- fail closed rather than trust it."""
+    import time
+
+    enforcer = _enforcer(sync_engine)
+    time.sleep(0.05)
+    current = enforcer.current_version
+
+    assert enforcer.confirm_current(current + 1) is False
+    assert enforcer.confirm_current(current - 1) is False
+    assert enforcer.staleness_s() >= 0.05

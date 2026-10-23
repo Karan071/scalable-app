@@ -7,6 +7,7 @@ rate limiting (LLD-09 §7).
 
 import asyncio
 import hashlib
+import logging
 import secrets
 import time
 
@@ -21,6 +22,7 @@ from .request_context import check_origin, cookie_names, require_session
 from .request_context import state as app_state
 
 router = APIRouter(prefix="/auth")
+logger = logging.getLogger("bff.auth")
 
 
 def _validate_return_to(return_to: str, allowed_prefixes: list[str]) -> str:
@@ -81,7 +83,7 @@ async def login(request: Request, return_to: str = "/") -> Response:
 
 @router.get("/step-up")
 async def step_up(request: Request, return_to: str = "/") -> Response:
-    """LLD-01 §9: ``prompt=login``/``acr_values=2`` re-authentication. The
+    """LLD-01 §9: ``acr_values=2`` re-authentication (one OTP). The
     binding cookie proves the same browser; the existing session (if any)
     is rotated — not replaced — once the callback completes (see ``callback``
     below), per §9 step 5's "rotates the session ID"."""
@@ -134,9 +136,12 @@ async def callback(
 
     if is_step_up:
         acr = str(principal.claim("acr") or "1")
-        if int(acr) < 2:
-            # The IdP didn't actually step up (e.g. cancelled MFA prompt) —
-            # don't silently accept a session rotation with no acr gain.
+        auth_time = int(principal.claim("auth_time") or 0)
+        if int(acr) < 2 or auth_time <= old_record.auth_time:
+            # The IdP didn't actually step up (e.g. cancelled MFA prompt), or
+            # answered from an earlier authentication instead of a fresh
+            # one (§9 step 5) — don't rotate the session without either.
+            # Both times are Keycloak's own, so clock skew can't matter.
             return RedirectResponse("/auth/error?code=step_up_not_satisfied", status_code=302)
         uid, sub, idp_sid = old_record.uid, old_record.sub, old_record.idp_sid
     else:
@@ -294,11 +299,17 @@ async def logout(request: Request) -> Response:
 
     await s.sessions.delete(session_id)
 
-    logout_url = s.oidc.end_session_url(
-        id_token=record.id_token, post_logout_redirect_uri=s.settings.app_origin
-    )
+    # Server-side, not a browser redirect carrying `id_token_hint` (LLD-01 §8,
+    # §16: no token material reaches the browser). Best effort: the local
+    # session is already gone, and Keycloak's own idle timeout ends its
+    # session if this call can't.
+    try:
+        await s.oidc.end_session(refresh_token=record.refresh_token)
+    except httpx.HTTPError:
+        logger.warning("Keycloak end-session failed; local session already revoked")
+
     session_cookie, _ = cookie_names(request)
-    response = RedirectResponse(logout_url, status_code=303)
+    response = RedirectResponse("/", status_code=303)
     response.delete_cookie(session_cookie, path="/")
     return response
 

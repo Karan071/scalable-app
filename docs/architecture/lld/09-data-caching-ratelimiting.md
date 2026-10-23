@@ -66,7 +66,7 @@
 
 - `db_pool_checked_out{service, pool}`;
 - `db_pool_wait_seconds{service, pool}` (histogram, from SQLAlchemy pool events);
-- `db_pool_timeouts_total`;
+- `db_pool_timeouts_total` (implemented: counted by the shared `503 db-busy` handler, which all four DB-backed services install via `sf_db.POOL_TIMEOUT_ERRORS`; `checked_out` and `wait_seconds` are not yet);
 - PgBouncer exporter: `cl_waiting`, `sv_active`, `avg_wait_time`.
 
 ## 3. Query design rules
