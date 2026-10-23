@@ -147,7 +147,17 @@ async def _emit_org_event(
         aggregate_type="organization",
         aggregate_id=org.id,
         aggregate_version=org.version,
-        data={"org_id": str(org.id), "slug": org.slug, "status": org.status},
+        data={
+            "org_id": str(org.id),
+            "slug": org.slug,
+            "status": org.status,
+            # catalog-svc's store_pricing_settings projection needs these to
+            # price a quote without calling orgs-svc synchronously (LLD-05 §3,
+            # §2 "Projection from organization.* events").
+            "currency": org.currency,
+            "shipping_flat_minor": org.shipping_flat_minor,
+            "tax_rate_bps": org.tax_rate_bps,
+        },
     )
 
 
