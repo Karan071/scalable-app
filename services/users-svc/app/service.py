@@ -8,7 +8,9 @@ gated on Casbin ``platform_user:manage`` plus the BFF's step-up flow.
 from dataclasses import dataclass
 from uuid import UUID
 
-from sf_messaging import add_to_outbox, build_envelope
+from sf_common import get_correlation_id
+from sf_messaging import add_to_outbox, build_envelope, record_audit
+from sf_messaging.audit import ActorType, Severity
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,6 +58,36 @@ async def _emit(
     )
 
 
+async def _audit(
+    session: AsyncSession,
+    user: User,
+    *,
+    action: str,
+    actor_type: ActorType,
+    actor_id: UUID,
+    reason: str | None = None,
+    severity: Severity = "info",
+) -> None:
+    """LLD-04 §2.4/§2.8. User lifecycle is platform-level, not org-scoped
+    (LLD-04 §3.1: ``user.disabled`` is "platform audit only")."""
+    await record_audit(
+        session,
+        notify_channel=_NOTIFY_CHANNEL,
+        source_service="users-svc",
+        action=action,
+        actor_type=actor_type,
+        actor_id=str(actor_id),
+        domain="platform",
+        target_type="user",
+        target_id=str(user.id),
+        aggregate_version=user.version,
+        reason=reason,
+        changes={"status": {"to": user.status}},
+        severity=severity,
+        correlation_id=get_correlation_id(),
+    )
+
+
 async def provision_user(
     session: AsyncSession,
     *,
@@ -76,6 +108,10 @@ async def provision_user(
     )
     if created is not None:
         await _emit(session, created, event_type="user.created", routing_key="user.created.v1")
+        # JIT provisioning on the user's own first login (LLD-01 §11.2).
+        await _audit(
+            session, created, action="user.provisioned", actor_type="user", actor_id=created.id
+        )
         return ProvisionResult(user_id=created.id, status=created.status, needs_claim_refresh=True)
 
     existing = await repository.get_by_idp_identity(
@@ -84,6 +120,40 @@ async def provision_user(
     if existing is None:
         raise AssertionError("unique constraint guarantees a row exists after a conflict")
     return ProvisionResult(user_id=existing.id, status=existing.status, needs_claim_refresh=False)
+
+
+async def request_idp_sync_retry(session: AsyncSession, *, user_id: UUID, idp_subject: str) -> None:
+    """LLD-01 §11.2: "Set Keycloak attribute sf_uid (sync admin call,
+    idempotent; retried by the outbox command user.idp_sync_requested if
+    it fails)." The synchronous call (routes.py) already happened and
+    already failed by the time this runs, and the user row's own insert
+    already committed before that -- so this is a separate, later
+    transaction, not "the same transaction as the state change" LLD-08
+    §5.2 normally requires; there is nothing left to piggyback on.
+
+    A command (LLD-08 §4.2), not an event: ``sf.commands``, self-consumed
+    by users-svc on ``q.users.commands`` -- same shape as authz-svc's
+    ``identity.mfa_group_sync_requested`` (events.py's docstring there)."""
+    user = await repository.get_by_id(session, user_id)
+    if user is None:
+        raise UserNotFoundOrAlreadyInState(user_id)
+    envelope = build_envelope(
+        event_type="user.idp_sync_requested",
+        source="users-svc",
+        subject=str(user_id),
+        data={"user_id": str(user_id), "idp_subject": idp_subject},
+        schema_version="1.0",
+        aggregate_type="user",
+        aggregate_version=user.version,
+    )
+    await add_to_outbox(
+        session,
+        envelope,
+        exchange="sf.commands",
+        routing_key="user.idp_sync_requested.v1",
+        aggregate_id=str(user_id),
+        notify_channel=_NOTIFY_CHANNEL,
+    )
 
 
 async def get_self(session: AsyncSession, user_id: UUID) -> User | None:
@@ -139,17 +209,36 @@ async def update_self(
         raise
 
 
-async def disable_user(session: AsyncSession, user_id: UUID, *, reason: str) -> None:
+async def disable_user(
+    session: AsyncSession, user_id: UUID, *, reason: str, actor_id: UUID
+) -> None:
     user = await repository.disable_user(session, user_id, reason=reason)
     if user is None:
         raise UserNotFoundOrAlreadyInState(user_id)
     await _emit(
         session, user, event_type="user.disabled", routing_key="user.disabled.v1", reason=reason
     )
+    await _audit(
+        session,
+        user,
+        action="user.disabled",
+        actor_type="user",
+        actor_id=actor_id,
+        reason=reason,
+        severity="notice",
+    )
 
 
-async def reactivate_user(session: AsyncSession, user_id: UUID) -> None:
+async def reactivate_user(session: AsyncSession, user_id: UUID, *, actor_id: UUID) -> None:
     user = await repository.reactivate_user(session, user_id)
     if user is None:
         raise UserNotFoundOrAlreadyInState(user_id)
     await _emit(session, user, event_type="user.reactivated", routing_key="user.reactivated.v1")
+    await _audit(
+        session,
+        user,
+        action="user.reactivated",
+        actor_type="user",
+        actor_id=actor_id,
+        severity="notice",
+    )

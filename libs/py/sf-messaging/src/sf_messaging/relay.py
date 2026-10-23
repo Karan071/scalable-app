@@ -34,11 +34,18 @@ DEFAULT_BATCH_SIZE = 200
 DEFAULT_POLL_INTERVAL_S = 0.25
 DEFAULT_CONFIRM_TIMEOUT_S = 5.0
 
+_EVENTS_EXCHANGE = "sf.events"
+_AMQP_NO_ROUTE = 312
+
+# `attempts` first: a row that keeps failing sinks behind every fresh one,
+# so a full batch of failures can never starve the rest of the outbox.
+# Ordering by `occurred_at` alone let 200 unroutable rows block orgs-svc's
+# relay completely (2026-10-21 .. 10-23).
 _CLAIM_SQL_TEMPLATE = """
     SELECT id, exchange, routing_key, payload
     FROM {table}
     WHERE published_at IS NULL
-    ORDER BY occurred_at, id
+    ORDER BY attempts, occurred_at, id
     LIMIT :batch_size
     FOR UPDATE SKIP LOCKED
 """
@@ -219,8 +226,22 @@ class OutboxRelay:
             )
             return None
         except aio_pika.exceptions.DeliveryError as exc:
-            # Returned (unroutable) or nacked — LLD-08 §5.3: a returned
-            # message means a topology bug; keep retrying, log loudly.
+            if (
+                row["exchange"] == _EVENTS_EXCHANGE
+                and getattr(exc.frame, "reply_code", None) == _AMQP_NO_ROUTE
+            ):
+                # An event with no subscriber yet (e.g. invitation.created
+                # before notifications-svc exists) is ordinary pub/sub, not a
+                # failure: done, not retried. Commands still fail on NO_ROUTE
+                # below -- a command always has exactly one intended consumer,
+                # so an unbound one is a real topology bug (LLD-08 §5.3).
+                logger.warning(
+                    "outbox relay: no queue bound for event %s (row %s); marked published",
+                    row["routing_key"],
+                    row["id"],
+                )
+                return None
+            # A nack, or an unroutable command: keep retrying, log loudly.
             logger.error("outbox relay delivery failed for %s: %s", row["id"], exc)
             return f"delivery_error: {exc}"
         except Exception as exc:

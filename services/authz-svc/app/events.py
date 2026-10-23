@@ -3,12 +3,24 @@ and the event-driven one (``event_handlers.py``)."""
 
 from uuid import UUID
 
-from sf_messaging import add_to_outbox, build_envelope
+from sf_common import get_correlation_id
+from sf_messaging import add_to_outbox, build_envelope, record_audit
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import RoleAssignment
 
 _NOTIFY_CHANNEL = "outbox_authz"
+
+# LLD-04 §2.8's catalog names. "role.reactivated" isn't in the catalog
+# (nothing there covers membership/user reactivation restoring a suspended
+# grant) -- named to match its siblings.
+_AUDIT_ACTION_BY_CHANGE = {
+    "granted": "role.assigned",
+    "revoked": "role.revoked",
+    "self_revoked": "role.revoked",
+    "suspended": "role.suspended",
+    "reactivated": "role.reactivated",
+}
 
 
 async def emit(
@@ -60,20 +72,27 @@ async def emit_role_changed(
             "actor_id": str(actor_id),
         },
     )
-    await emit(
+    is_platform_grant = change == "granted" and assignment.domain == "platform"
+    action = "platform_role.assigned" if is_platform_grant else _AUDIT_ACTION_BY_CHANGE[change]
+    await record_audit(
         session,
-        event_type="audit.recorded",
-        routing_key="audit.recorded.v1",
-        aggregate_type="role_assignment",
-        aggregate_id=assignment.id,
+        notify_channel=_NOTIFY_CHANNEL,
+        source_service="authz-svc",
+        action=action,
+        actor_type="user",
+        actor_id=str(actor_id),
+        domain=assignment.domain,
+        target_type="role_assignment",
+        target_id=str(assignment.id),
         aggregate_version=assignment.version,
-        data={
-            "action": f"role_assignment.{change}",
-            "actor_id": str(actor_id),
-            "target_user_id": str(assignment.user_id),
-            "role_id": assignment.role_id,
-            "domain": assignment.domain,
+        reason=assignment.reason,
+        changes={
+            "user_id": {"to": str(assignment.user_id)},
+            "role_id": {"to": assignment.role_id},
+            "status": {"to": assignment.status},
         },
+        severity="high" if is_platform_grant else "info",
+        correlation_id=get_correlation_id(),
     )
 
 

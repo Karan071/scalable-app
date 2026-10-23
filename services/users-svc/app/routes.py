@@ -80,12 +80,22 @@ async def provision(
                 keycloak_user_id=body.idp_subject, sf_uid=str(result.user_id)
             )
         except Exception:
-            # LLD-01 §11.2 plans an async retry via the outbox command
-            # `user.idp_sync_requested` for this failure path; that command
-            # handler doesn't exist yet (open item), so this just logs.
             logger.exception(
-                "failed to sync sf_uid to Keycloak", extra={"sf_uid": str(result.user_id)}
+                "failed to sync sf_uid to Keycloak directly; queuing a retry via the outbox",
+                extra={"sf_uid": str(result.user_id)},
             )
+            try:
+                async with transaction(request.app.state.session_factory) as session:
+                    await service.request_idp_sync_retry(
+                        session, user_id=result.user_id, idp_subject=body.idp_subject
+                    )
+            except Exception:
+                # Never fail the provision response over retry bookkeeping:
+                # provisioning itself already committed successfully above.
+                logger.exception(
+                    "failed to queue the sf_uid sync retry itself",
+                    extra={"sf_uid": str(result.user_id)},
+                )
 
     return ProvisionResponse(
         user_id=result.user_id, status=result.status, needs_claim_refresh=result.needs_claim_refresh
@@ -225,10 +235,12 @@ async def disable_platform_user(
     user_id: UUID,
     body: PlatformDisableUserRequest,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_manage_platform_user),
+    principal: Principal = Depends(require_manage_platform_user),
 ) -> dict[str, str]:
     try:
-        await service.disable_user(session, user_id, reason=body.reason)
+        await service.disable_user(
+            session, user_id, reason=body.reason, actor_id=_sf_uid(principal)
+        )
     except service.UserNotFoundOrAlreadyInState as exc:
         raise HTTPException(status_code=404) from exc
     return {"status": "disabled"}
@@ -238,10 +250,10 @@ async def disable_platform_user(
 async def reactivate_platform_user(
     user_id: UUID,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_manage_platform_user),
+    principal: Principal = Depends(require_manage_platform_user),
 ) -> dict[str, str]:
     try:
-        await service.reactivate_user(session, user_id)
+        await service.reactivate_user(session, user_id, actor_id=_sf_uid(principal))
     except service.UserNotFoundOrAlreadyInState as exc:
         raise HTTPException(status_code=404) from exc
     return {"status": "active"}

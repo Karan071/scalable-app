@@ -17,7 +17,7 @@ from uuid import UUID
 from sf_messaging import add_to_outbox, build_envelope
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import repository
+from . import repository, service
 
 CONSUMER_NAME = "orgs.users"
 
@@ -56,6 +56,21 @@ async def handle_user_disabled(session: AsyncSession, envelope: dict) -> None:
             routing_key="membership.disabled.v1",
             aggregate_id=str(membership.id),
             notify_channel=_NOTIFY_CHANNEL,
+        )
+        # No human acted on this membership: it's a cascade of the user's
+        # own disable, which users-svc audits separately.
+        await service.audit(
+            session,
+            action="membership.disabled",
+            actor_type="system",
+            actor_id="orgs-svc",
+            org_id=membership.org_id,
+            target_type="membership",
+            target_id=membership.id,
+            aggregate_version=membership.version,
+            reason="user_disabled",
+            changes={"user_id": {"to": str(user_id)}, "status": {"to": membership.status}},
+            severity="notice",
         )
 
 

@@ -40,9 +40,7 @@ async def _run(session_factory, handler, envelope: dict) -> None:
         await handler(session, envelope)
 
 
-async def _insert_active_membership(
-    session_factory, *, org_id: UUID, user_id: UUID
-) -> UUID:
+async def _insert_active_membership(session_factory, *, org_id: UUID, user_id: UUID) -> UUID:
     from app import repository
 
     async with session_factory() as session, session.begin():

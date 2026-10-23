@@ -31,8 +31,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sf_common import TokenCipher
-from sf_messaging import add_to_outbox, build_envelope
+from sf_common import TokenCipher, get_correlation_id
+from sf_messaging import add_to_outbox, build_envelope, record_audit
+from sf_messaging.audit import ActorType, Severity
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import repository
@@ -101,6 +102,41 @@ async def _emit(
     )
 
 
+async def audit(
+    session: AsyncSession,
+    *,
+    action: str,
+    actor_id: UUID | str,
+    org_id: UUID,
+    target_type: str,
+    target_id: UUID,
+    aggregate_version: int,
+    actor_type: ActorType = "user",
+    reason: str | None = None,
+    changes: dict[str, object] | None = None,
+    severity: Severity = "info",
+) -> None:
+    """LLD-04 §2.4: one ``audit.recorded`` outbox row, same transaction as
+    the audited change. Every orgs-svc action is scoped to its org's
+    domain, so org admins see them through the org-scoped audit query."""
+    await record_audit(
+        session,
+        notify_channel=_NOTIFY_CHANNEL,
+        source_service="orgs-svc",
+        action=action,
+        actor_type=actor_type,
+        actor_id=str(actor_id),
+        domain=f"org:{org_id}",
+        target_type=target_type,
+        target_id=str(target_id),
+        aggregate_version=aggregate_version,
+        reason=reason,
+        changes=changes,
+        severity=severity,
+        correlation_id=get_correlation_id(),
+    )
+
+
 async def _emit_org_event(
     session: AsyncSession, org: Organization, event_type: str, routing_key: str
 ) -> None:
@@ -151,6 +187,20 @@ async def create_organization(
         created_by=created_by,
     )
     await _emit_org_event(session, org, "organization.created", "organization.created.v1")
+    await audit(
+        session,
+        action="org.created",
+        actor_id=created_by,
+        org_id=org.id,
+        target_type="organization",
+        target_id=org.id,
+        aggregate_version=org.version,
+        changes={
+            "name": {"to": org.name},
+            "slug": {"to": org.slug},
+            "status": {"to": org.status},
+        },
+    )
 
     owner_invitation = await create_invitation(
         session,
@@ -169,6 +219,7 @@ async def update_organization_settings(
     org_id: UUID,
     *,
     expected_version: int,
+    actor_id: UUID,
     name: str | None = None,
     shipping_flat_minor: int | None = None,
     tax_rate_bps: int | None = None,
@@ -187,11 +238,34 @@ async def update_organization_settings(
     except repository.VersionConflict as exc:
         raise VersionConflictError(org_id) from exc
     await _emit_org_event(session, org, "organization.updated", "organization.updated.v1")
+    # LLD-04 §2.7 allow-list for org.updated. The free-form `settings` map
+    # is deliberately excluded: only its presence is recorded, not content.
+    changed: dict[str, object] = {
+        field: {"to": value}
+        for field, value in (
+            ("name", name),
+            ("shipping_flat_minor", shipping_flat_minor),
+            ("tax_rate_bps", tax_rate_bps),
+        )
+        if value is not None
+    }
+    if settings is not None:
+        changed["settings"] = {"to": "<updated>"}
+    await audit(
+        session,
+        action="org.updated",
+        actor_id=actor_id,
+        org_id=org.id,
+        target_type="organization",
+        target_id=org.id,
+        aggregate_version=org.version,
+        changes=changed,
+    )
     return org
 
 
 async def transition_organization(
-    session: AsyncSession, org_id: UUID, *, action: str, reason: str | None
+    session: AsyncSession, org_id: UUID, *, action: str, reason: str | None, actor_id: UUID
 ) -> Organization:
     """``action`` is one of ``suspend``/``reactivate``/``archive`` (LLD-03 §4)."""
     org = await repository.get_organization(session, org_id)
@@ -201,6 +275,8 @@ async def transition_organization(
         raise InvalidTransition(f"cannot {action} an org in status {org.status!r}")
 
     new_status = {"suspend": "suspended", "reactivate": "active", "archive": "archived"}[action]
+    # Read before the UPDATE: its ORM RETURNING refreshes `org` in place.
+    previous_status = org.status
     updated = await repository.update_organization_status(
         session, org_id, new_status=new_status, reason=reason
     )
@@ -217,6 +293,18 @@ async def transition_organization(
     ]
     await _emit_org_event(
         session, updated, f"organization.{event_name}", f"organization.{event_name}.v1"
+    )
+    await audit(
+        session,
+        action=f"org.{event_name}",
+        actor_id=actor_id,
+        org_id=updated.id,
+        target_type="organization",
+        target_id=updated.id,
+        aggregate_version=updated.version,
+        reason=reason,
+        changes={"status": {"from": previous_status, "to": updated.status}},
+        severity="notice",
     )
     return updated
 
@@ -268,13 +356,32 @@ async def create_invitation(
             "token_enc": token_enc,
         },
     )
+    # Never the token (LLD-04 §2.7), nor the invitee's email: the
+    # invitation row is the target, and it holds the email for anyone
+    # authorized to look it up.
+    await audit(
+        session,
+        action="invitation.created",
+        actor_id=invited_by,
+        org_id=org_id,
+        target_type="invitation",
+        target_id=invitation.id,
+        aggregate_version=invitation.version,
+        changes={"roles_requested": {"to": roles_requested}},
+    )
     return CreatedInvitation(
         invitation_id=invitation.id, raw_token=raw_token, expires_at=expires_at
     )
 
 
 async def resend_invitation(
-    session: AsyncSession, invitation_id: UUID, *, org_id: UUID, ttl_days: int, cipher: TokenCipher
+    session: AsyncSession,
+    invitation_id: UUID,
+    *,
+    org_id: UUID,
+    actor_id: UUID,
+    ttl_days: int,
+    cipher: TokenCipher,
 ) -> CreatedInvitation:
     raw_token = secrets.token_urlsafe(32)
     expires_at = datetime.now(UTC) + timedelta(days=ttl_days)
@@ -304,12 +411,23 @@ async def resend_invitation(
             "token_enc": token_enc,
         },
     )
+    await audit(
+        session,
+        action="invitation.resent",
+        actor_id=actor_id,
+        org_id=org_id,
+        target_type="invitation",
+        target_id=invitation.id,
+        aggregate_version=invitation.version,
+    )
     return CreatedInvitation(
         invitation_id=invitation.id, raw_token=raw_token, expires_at=expires_at
     )
 
 
-async def revoke_invitation(session: AsyncSession, invitation_id: UUID, *, org_id: UUID) -> None:
+async def revoke_invitation(
+    session: AsyncSession, invitation_id: UUID, *, org_id: UUID, actor_id: UUID
+) -> None:
     invitation = await repository.update_invitation_status(
         session, invitation_id, org_id=org_id, new_status="revoked"
     )
@@ -323,6 +441,15 @@ async def revoke_invitation(session: AsyncSession, invitation_id: UUID, *, org_i
         aggregate_id=invitation.id,
         aggregate_version=invitation.version,
         data={"invitation_id": str(invitation.id), "org_id": str(org_id)},
+    )
+    await audit(
+        session,
+        action="invitation.revoked",
+        actor_id=actor_id,
+        org_id=org_id,
+        target_type="invitation",
+        target_id=invitation.id,
+        aggregate_version=invitation.version,
     )
 
 
@@ -377,6 +504,17 @@ async def accept_invitation(
             await _emit_org_event(
                 session, activated, "organization.updated", "organization.updated.v1"
             )
+            await audit(
+                session,
+                action="org.updated",
+                actor_id=user_id,
+                org_id=activated.id,
+                target_type="organization",
+                target_id=activated.id,
+                aggregate_version=activated.version,
+                reason="owner_invitation_accepted",
+                changes={"status": {"from": "pending", "to": activated.status}},
+            )
 
     await _emit(
         session,
@@ -401,6 +539,28 @@ async def accept_invitation(
         aggregate_id=invitation.id,
         aggregate_version=invitation.version,
         data={"invitation_id": str(invitation.id), "org_id": str(invitation.org_id)},
+    )
+    await audit(
+        session,
+        action="invitation.accepted",
+        actor_id=user_id,
+        org_id=invitation.org_id,
+        target_type="invitation",
+        target_id=invitation.id,
+        aggregate_version=invitation.version,
+    )
+    await audit(
+        session,
+        action="membership.created",
+        actor_id=user_id,
+        org_id=invitation.org_id,
+        target_type="membership",
+        target_id=membership.id,
+        aggregate_version=membership.version,
+        changes={
+            "user_id": {"to": str(user_id)},
+            "roles_requested": {"to": invitation.roles_requested},
+        },
     )
     return AcceptedInvitation(org_id=invitation.org_id, membership_id=membership.id)
 
@@ -443,6 +603,21 @@ async def _transition_membership(
             "user_id": str(membership.user_id),
             "actor_id": str(actor_id),
         },
+    )
+    await audit(
+        session,
+        action=event_type,
+        actor_id=actor_id,
+        org_id=org_id,
+        target_type="membership",
+        target_id=membership.id,
+        aggregate_version=membership.version,
+        reason=reason,
+        changes={
+            "user_id": {"to": str(membership.user_id)},
+            "status": {"to": membership.status},
+        },
+        severity="notice",
     )
 
 

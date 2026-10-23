@@ -21,6 +21,12 @@ from . import repository
 CONSUMER_NAME = "audit.ingest"
 
 
+def _trace_id_from_traceparent(traceparent: str | None) -> str | None:
+    # W3C traceparent: "<version>-<trace-id>-<parent-id>-<flags>"
+    parts = (traceparent or "").split("-")
+    return parts[1] if len(parts) == 4 else None
+
+
 async def handle_audit_recorded(session: AsyncSession, envelope: dict) -> None:
     data: dict = envelope.get("data", {})
 
@@ -53,8 +59,8 @@ async def handle_audit_recorded(session: AsyncSession, envelope: dict) -> None:
         reason=data.get("reason"),
         changes=data.get("changes"),
         source=data.get("source", {}),
-        correlation_id=data.get("correlation_id") or envelope.get("datacontenttype"),
-        trace_id=data.get("trace_id") or envelope.get("traceparent"),
+        correlation_id=data.get("correlation_id") or envelope.get("sfcorrelationid"),
+        trace_id=data.get("trace_id") or _trace_id_from_traceparent(envelope.get("traceparent")),
         client=data.get("client"),
         severity=str(data.get("severity", "info")),
     )

@@ -178,17 +178,20 @@ Runs in every replica of the producing service:
 loop:
   wait for NOTIFY or 250 ms poll tick
   BEGIN
-    rows = SELECT … WHERE published_at IS NULL ORDER BY occurred_at, id
+    rows = SELECT … WHERE published_at IS NULL ORDER BY attempts, occurred_at, id
            LIMIT 200 FOR UPDATE SKIP LOCKED
     publish each (mandatory=true) ; await publisher confirms (timeout 5 s)
-    UPDATE outbox SET published_at = now() WHERE id IN (confirmed ids)
-    UPDATE outbox SET attempts = attempts + 1, last_error = … WHERE id IN (nacked/returned)
+    UPDATE outbox SET published_at = now() WHERE id IN (confirmed ids + returned events)
+    UPDATE outbox SET attempts = attempts + 1, last_error = … WHERE id IN (nacked/returned commands)
   COMMIT
   on broker error: exponential backoff 1 s → 30 s (full jitter)
 ```
 
 - The relay uses a **direct, non-pooled connection**, because `LISTEN` needs a session.
-- **Returned (unroutable) messages** mean a topology bug: alert, and keep retrying.
+- **Claim order puts `attempts` first**, so rows that keep failing sink behind fresh ones. Ordering by `occurred_at` alone let one batch of permanently failing rows starve everything newer: orgs-svc's relay published nothing from 2026-10-21 to 10-23, blocked behind unroutable `invitation.*` rows. The partial index's `(occurred_at, id)` order no longer matches the sort; fine at current backlog sizes, revisit with EXP-2 if outbox backlogs grow.
+- **Returned (unroutable) messages** are split by exchange (correction to this section's original "always a topology bug" rule):
+  - **`sf.events`**: an event with no bound queue yet is ordinary pub/sub, e.g. `invitation.created` before notifications-svc ships in M4. The relay logs a warning and marks it published; it is not retried. Missing bindings stay visible in that warning, unlike `mandatory=false`, which would drop silently.
+  - **`sf.commands`**: a command always has exactly one intended consumer, so an unroutable one is a real topology bug. Alert, and keep retrying. This is what caught `identity.mfa_group_sync_requested` being published to the wrong exchange.
 - A crash after publish but before commit republishes the same `id`. Consumers dedupe.
 - **Latency target:** commit → broker p99 ≤ 1 s (to validate).
 

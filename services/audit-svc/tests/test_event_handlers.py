@@ -196,3 +196,94 @@ async def test_svc_audit_cannot_update_rows(
     # Either a permission denied (42501) or the trigger (P0001) fires.
     err_str = str(exc_info.value)
     assert "append-only" in err_str or "permission denied" in err_str or "42501" in err_str
+
+
+async def test_payload_from_the_shared_producer_helper_is_stored(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Contract test: producers build payloads with ``sf_messaging``'s
+    ``build_audit_data``; this handler must store them, not drop them.
+    authz-svc's original hand-rolled payload had no ``audit_id``, so every
+    role-change audit it ever published was silently discarded here."""
+    from app import event_handlers
+    from app.models import AuditEvent
+    from sf_messaging import build_audit_data, build_envelope
+
+    target_id = str(uuid.uuid4())
+    data = build_audit_data(
+        source_service="orgs-svc",
+        action="membership.disabled",
+        actor_type="user",
+        actor_id=str(uuid.uuid4()),
+        domain=f"org:{uuid.uuid4()}",
+        target_type="membership",
+        target_id=target_id,
+        reason="left the company",
+        changes={"status": {"to": "disabled"}},
+        severity="notice",
+        correlation_id="corr-from-producer",
+    )
+    envelope = build_envelope(
+        event_type="audit.recorded",
+        source="orgs-svc",
+        subject=target_id,
+        data=data,
+        schema_version="1.0",
+        aggregate_type="membership",
+        aggregate_version=2,
+    )
+
+    async with session_factory() as session, session.begin():
+        await event_handlers.handle_audit_recorded(session, envelope)
+
+    async with session_factory() as session:
+        row = await session.get(AuditEvent, uuid.UUID(data["audit_id"]))
+
+    assert row is not None
+    assert row.action == "membership.disabled"
+    assert row.actor == data["actor"]
+    assert row.target == {"type": "membership", "id": target_id}
+    assert row.domain == data["domain"]
+    assert row.severity == "notice"
+    assert row.reason == "left the company"
+    assert row.correlation_id == "corr-from-producer"
+
+
+async def test_falls_back_to_envelope_correlation_and_trace_ids(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app import event_handlers
+    from app.models import AuditEvent
+    from sf_messaging import build_envelope
+
+    audit_id = uuid.uuid4()
+    trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+    envelope = build_envelope(
+        event_type="audit.recorded",
+        source="users-svc",
+        subject=str(audit_id),
+        data={
+            "audit_id": str(audit_id),
+            "actor": {"type": "user", "id": str(uuid.uuid4())},
+            "domain": "platform",
+            "action": "user.disabled",
+            "target": {"type": "user", "id": str(uuid.uuid4())},
+        },
+        schema_version="1.0",
+        aggregate_type="user",
+        aggregate_version=1,
+        correlation_id="corr-from-envelope",
+        traceparent=f"00-{trace_id}-00f067aa0ba902b7-01",
+    )
+
+    async with session_factory() as session, session.begin():
+        await event_handlers.handle_audit_recorded(session, envelope)
+
+    async with session_factory() as session:
+        row = await session.get(AuditEvent, audit_id)
+
+    assert row is not None
+    # Previously: "application/json" (datacontenttype) and the whole
+    # traceparent string, respectively.
+    assert row.correlation_id == "corr-from-envelope"
+    assert row.trace_id == trace_id

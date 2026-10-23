@@ -527,16 +527,13 @@ async def test_user_disabled_emits_no_mfa_sync_without_an_mfa_role(
 
     async with session_factory() as session:
         rows = (
-            (
-                await session.execute(
-                    text(
-                        "SELECT 1 FROM outbox "
-                        "WHERE payload->>'type' = 'identity.mfa_group_sync_requested' "
-                        "AND payload->'data'->>'user_id' = :user_id"
-                    ),
-                    {"user_id": str(user_id)},
-                )
+            await session.execute(
+                text(
+                    "SELECT 1 FROM outbox "
+                    "WHERE payload->>'type' = 'identity.mfa_group_sync_requested' "
+                    "AND payload->'data'->>'user_id' = :user_id"
+                ),
+                {"user_id": str(user_id)},
             )
-            .all()
-        )
+        ).all()
     assert rows == []

@@ -99,7 +99,7 @@ This LLD covers:
 | Orgs | `org.created`, `org.updated`, `org.suspended`, `org.reactivated`, `org.archived` |
 | Membership | `membership.created`, `membership.disabled`, `membership.reactivated`, `membership.revoked` |
 | Invitations | `invitation.created`, `invitation.resent`, `invitation.revoked`, `invitation.accepted` |
-| Authorization | `role.assigned`, `role.revoked`, `role.suspended`, `platform_role.assigned` (high), `authz.denied` |
+| Authorization | `role.assigned`, `role.revoked`, `role.suspended`, `role.reactivated` (added: a membership reactivation restoring a suspended grant had no action), `platform_role.assigned` (high), `authz.denied` |
 | Commerce admin | `product.created/updated/archived`, `price.changed`, `stock.adjusted`, `order.status_changed` (staff), `order.cancelled` (staff), `refund.created` |
 | Platform ops | `dlq.replayed`, `reconciliation.run`, `feature_flag.changed`, `platform.access_reason` (break-glass), `audit.queried` |
 

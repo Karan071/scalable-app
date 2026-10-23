@@ -183,18 +183,22 @@ async def suspend_organization(
     org_id: UUID,
     body: TransitionRequest,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_suspend_platform_org),
+    principal: Principal = Depends(require_suspend_platform_org),
 ) -> OrganizationResponse:
-    return await _transition_org(session, org_id, action="suspend", reason=body.reason)
+    return await _transition_org(
+        session, org_id, action="suspend", reason=body.reason, actor_id=_sf_uid(principal)
+    )
 
 
 @router.post("/v1/platform/orgs/{org_id}:reactivate", response_model=OrganizationResponse)
 async def reactivate_organization(
     org_id: UUID,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_reactivate_platform_org),
+    principal: Principal = Depends(require_reactivate_platform_org),
 ) -> OrganizationResponse:
-    return await _transition_org(session, org_id, action="reactivate", reason=None)
+    return await _transition_org(
+        session, org_id, action="reactivate", reason=None, actor_id=_sf_uid(principal)
+    )
 
 
 @router.post("/v1/platform/orgs/{org_id}:archive", response_model=OrganizationResponse)
@@ -202,16 +206,20 @@ async def archive_organization(
     org_id: UUID,
     body: TransitionRequest,
     session: AsyncSession = Depends(get_session),
-    _: Principal = Depends(require_archive_platform_org),
+    principal: Principal = Depends(require_archive_platform_org),
 ) -> OrganizationResponse:
-    return await _transition_org(session, org_id, action="archive", reason=body.reason)
+    return await _transition_org(
+        session, org_id, action="archive", reason=body.reason, actor_id=_sf_uid(principal)
+    )
 
 
 async def _transition_org(
-    session: AsyncSession, org_id: UUID, *, action: str, reason: str | None
+    session: AsyncSession, org_id: UUID, *, action: str, reason: str | None, actor_id: UUID
 ) -> OrganizationResponse:
     try:
-        org = await service.transition_organization(session, org_id, action=action, reason=reason)
+        org = await service.transition_organization(
+            session, org_id, action=action, reason=reason, actor_id=actor_id
+        )
     except service.NotFoundError as exc:
         raise HTTPException(status_code=404) from exc
     except service.InvalidTransition as exc:
@@ -255,6 +263,7 @@ async def update_organization(
             session,
             org_id,
             expected_version=current.version,
+            actor_id=_sf_uid(principal),
             name=body.name,
             shipping_flat_minor=body.shipping_flat_minor,
             tax_rate_bps=body.tax_rate_bps,
@@ -436,6 +445,7 @@ async def resend_invitation(
             session,
             invitation_id,
             org_id=org_id,
+            actor_id=_sf_uid(principal),
             ttl_days=request.app.state.settings.invitation_ttl_days,
             cipher=request.app.state.invitation_cipher,
         )
@@ -455,7 +465,9 @@ async def revoke_invitation(
 ) -> dict[str, str]:
     await _require_active_membership(session, org_id=org_id, user_id=_sf_uid(principal))
     try:
-        await service.revoke_invitation(session, invitation_id, org_id=org_id)
+        await service.revoke_invitation(
+            session, invitation_id, org_id=org_id, actor_id=_sf_uid(principal)
+        )
     except service.NotFoundError as exc:
         raise HTTPException(status_code=404) from exc
     return {"status": "revoked"}

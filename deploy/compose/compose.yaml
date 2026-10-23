@@ -243,6 +243,19 @@ services:
         curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.commands/q/q.authz.commands" \
           -H 'content-type: application/json' \
           -d '{"routing_key":"identity.mfa_group_sync_requested.v1"}'
+
+        # q.users.commands (E2.8, LLD-01 §11.2): users-svc self-consumes
+        # user.idp_sync_requested.v1 -- the retry path for the synchronous
+        # Keycloak sf_uid sync call (routes.py) when it fails.
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands.dlq" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.users.commands.dlq"}}'
+        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.commands/q/q.users.commands" \
+          -H 'content-type: application/json' \
+          -d '{"routing_key":"user.idp_sync_requested.v1"}'
     restart: "no"
 
   mailpit:

@@ -433,3 +433,68 @@ def test_create_invitation_ignores_mass_assignment_fields(client: TestClient) ->
     # And the other org was never touched at all.
     other_invitations = client.get(f"/v1/orgs/{other_org_id}/invitations")
     assert other_invitations.status_code in (403, 404)
+
+
+async def _audit_payloads_for_org(org_id: str) -> list[dict]:
+    from app.db import build_orgs_engine, build_orgs_session_factory
+    from app.settings import Settings
+
+    engine = build_orgs_engine(Settings())
+    factory = build_orgs_session_factory(engine)
+    async with factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT payload FROM outbox "
+                        "WHERE payload->>'type' = 'audit.recorded' "
+                        "AND payload->>'sforgid' = :org_id "
+                        "ORDER BY occurred_at"
+                    ),
+                    {"org_id": org_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    await engine.dispose()
+    return [row["payload"] for row in rows]
+
+
+def test_org_lifecycle_is_audited_without_leaking_tokens_or_emails(client: TestClient) -> None:
+    """LLD-04 §2.4 (one audit row per audited change, same transaction) and
+    §2.7 (never record invitation tokens)."""
+    import asyncio
+    import json
+
+    creator = uuid4()
+    owner_email = f"owner-{uuid7().hex}@example.com"
+    org = _create_org(client, creator, owner_email=owner_email)
+    _as_user(creator)
+    suspend = client.post(f"/v1/platform/orgs/{org['id']}:suspend", json={"reason": "fraud review"})
+    assert suspend.status_code == 200
+
+    payloads = asyncio.run(_audit_payloads_for_org(org["id"]))
+    actions = [p["data"]["action"] for p in payloads]
+    assert actions == [
+        "org.created",
+        "invitation.created",
+        "org.updated",  # pending -> active, on the owner accepting
+        "invitation.accepted",
+        "membership.created",
+        "org.suspended",
+    ]
+    for p in payloads:
+        assert p["data"]["audit_id"]
+        assert p["data"]["domain"] == f"org:{org['id']}"
+
+    suspended = payloads[-1]["data"]
+    assert suspended["actor"] == {"type": "user", "id": str(creator)}
+    assert suspended["reason"] == "fraud review"
+    assert suspended["changes"] == {"status": {"from": "active", "to": "suspended"}}
+
+    _invitation_id, raw_token = asyncio.run(_decrypt_latest_invitation_token(org["id"]))
+    serialized = json.dumps([p["data"] for p in payloads])
+    assert raw_token not in serialized
+    assert "token" not in serialized
+    assert owner_email not in serialized

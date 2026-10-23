@@ -197,3 +197,134 @@ async def test_relay_reacts_to_notify_faster_than_a_long_poll_interval(
         assert elapsed < 10.0, "pickup took as long as the poll interval -- NOTIFY path didn't fire"
     finally:
         await relay.stop()
+
+
+async def _insert_row(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    exchange: str,
+    routing_key: str,
+    occurred_at_sql: str = "now()",
+) -> str:
+    aggregate_id = f"widget-{uuid4().hex[:8]}"
+    envelope = build_envelope(
+        event_type=routing_key.removesuffix(".v1"),
+        source="test",
+        subject=aggregate_id,
+        data={"id": aggregate_id},
+        schema_version="1.0",
+        aggregate_type="widget",
+        aggregate_version=1,
+    )
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO test_relay_outbox "
+                "(id, exchange, routing_key, aggregate_type, aggregate_id, aggregate_version, "
+                f"payload, occurred_at) VALUES (:id, :ex, :rk, 'widget', :aid, 1, :payload, "
+                f"{occurred_at_sql})"
+            ),
+            {
+                "id": envelope["id"],
+                "ex": exchange,
+                "rk": routing_key,
+                "aid": aggregate_id,
+                "payload": json.dumps(envelope),
+            },
+        )
+    return envelope["id"]
+
+
+async def _row_state(
+    session_factory: async_sessionmaker[AsyncSession], row_id: str
+) -> tuple[object, int, str | None]:
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT published_at, attempts, last_error FROM test_relay_outbox "
+                    "WHERE id = :id"
+                ),
+                {"id": row_id},
+            )
+        ).one()
+    return row[0], row[1], row[2]
+
+
+def _relay(session_factory: async_sessionmaker[AsyncSession], **kwargs: object) -> OutboxRelay:
+    return OutboxRelay(
+        service_name="test",
+        session_factory=session_factory,
+        dsn_asyncpg=_DSN_ASYNCPG,
+        amqp_url=_AMQP_URL,
+        notify_channel="outbox_relay_test3",
+        outbox_table="test_relay_outbox",
+        poll_interval_s=0.05,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+async def test_an_event_with_no_bound_queue_is_marked_published_not_retried(
+    session_factory: async_sessionmaker[AsyncSession], test_queue
+) -> None:
+    row_id = await _insert_row(
+        session_factory, exchange="sf.events", routing_key=f"nobody.{uuid4().hex}.v1"
+    )
+    relay = _relay(session_factory)
+    await relay.start()
+    try:
+        await asyncio.sleep(0.6)
+    finally:
+        await relay.stop()
+
+    published_at, attempts, last_error = await _row_state(session_factory, row_id)
+    assert published_at is not None
+    assert attempts == 0
+    assert last_error is None
+
+
+async def test_a_command_with_no_bound_queue_stays_unpublished_and_is_retried(
+    session_factory: async_sessionmaker[AsyncSession], test_queue
+) -> None:
+    row_id = await _insert_row(
+        session_factory, exchange="sf.commands", routing_key=f"nobody.{uuid4().hex}.v1"
+    )
+    relay = _relay(session_factory)
+    await relay.start()
+    try:
+        await asyncio.sleep(0.6)
+    finally:
+        await relay.stop()
+
+    published_at, attempts, last_error = await _row_state(session_factory, row_id)
+    assert published_at is None
+    assert attempts >= 1
+    assert last_error is not None and "NO_ROUTE" in last_error
+
+
+async def test_rows_that_keep_failing_cannot_starve_newer_ones(
+    session_factory: async_sessionmaker[AsyncSession], test_queue
+) -> None:
+    """More permanently failing rows than one batch holds, all older than
+    a routable row: ordering by ``occurred_at`` alone re-claims the same
+    failures every tick and never reaches the routable row."""
+    for _ in range(5):
+        await _insert_row(
+            session_factory,
+            exchange="sf.commands",
+            routing_key=f"nobody.{uuid4().hex}.v1",
+            occurred_at_sql="now() - interval '1 hour'",
+        )
+    fresh_id = await _insert_row(
+        session_factory, exchange="sf.events", routing_key="widget.created.v1"
+    )
+
+    relay = _relay(session_factory, batch_size=3)
+    await relay.start()
+    try:
+        body = await _consume_one(test_queue, timeout_s=5)
+    finally:
+        await relay.stop()
+
+    assert body is not None
+    assert json.loads(body)["id"] == fresh_id

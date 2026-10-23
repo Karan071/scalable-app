@@ -6,6 +6,7 @@ from uuid import UUID, uuid4, uuid7
 import pytest
 from fastapi.testclient import TestClient
 from sf_authz import Principal
+from sqlalchemy import text
 
 
 @pytest.fixture
@@ -77,6 +78,52 @@ def test_provision_is_idempotent(client: TestClient) -> None:
 
     assert first["user_id"] == second["user_id"]
     assert second["needs_claim_refresh"] is False
+
+
+async def _idp_sync_retry_rows(user_id: str) -> list[dict]:
+    from app.db import build_users_engine, build_users_session_factory
+    from app.settings import Settings
+
+    engine = build_users_engine(Settings())
+    factory = build_users_session_factory(engine)
+    async with factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT payload FROM outbox "
+                        "WHERE payload->>'type' = 'user.idp_sync_requested' "
+                        "AND payload->'data'->>'user_id' = :user_id"
+                    ),
+                    {"user_id": user_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    await engine.dispose()
+    return [row["payload"] for row in rows]
+
+
+def test_provision_queues_an_idp_sync_retry_when_the_direct_keycloak_call_fails(
+    client: TestClient,
+) -> None:
+    """``SF_KEYCLOAK_ADMIN_BASE_URL`` points at an unreachable test host
+    (conftest.py), so the synchronous ``set_sf_uid`` call in routes.py
+    always fails here -- exactly the path LLD-01 §11.2's outbox retry
+    exists for."""
+    import asyncio
+
+    body = _unique_identity()
+
+    response = client.post("/internal/v1/users:provision", json=body)
+    assert response.status_code == 200
+    user_id = response.json()["user_id"]
+
+    rows = asyncio.run(_idp_sync_retry_rows(user_id))
+    assert len(rows) == 1
+    assert rows[0]["data"]["idp_subject"] == body["idp_subject"]
+    assert rows[0]["sfschemaversion"] == "1.0"
 
 
 def test_get_me_returns_the_provisioned_profile(client: TestClient) -> None:
@@ -155,15 +202,19 @@ def test_batch_returns_only_requested_ids(client: TestClient) -> None:
     assert second["user_id"] not in returned_ids
 
 
-def _as_platform_admin(client: TestClient) -> None:
+def _as_platform_admin(client: TestClient) -> UUID:
     from app.main import app
     from app.routes import require_manage_platform_user, require_read_platform_user
 
+    admin_id = uuid7()
     principal = Principal(
-        subject=f"user:{uuid7()}", audiences=("scaleforge-api",), claims={"acr": 2}
+        subject=f"user:{admin_id}",
+        audiences=("scaleforge-api",),
+        claims={"acr": 2, "sf_uid": str(admin_id)},
     )
     app.dependency_overrides[require_read_platform_user] = lambda: principal
     app.dependency_overrides[require_manage_platform_user] = lambda: principal
+    return admin_id
 
 
 def test_list_platform_users_finds_by_search(client: TestClient) -> None:
@@ -241,3 +292,52 @@ def test_patch_me_ignores_mass_assignment_fields(client: TestClient) -> None:
     assert body["status"] == "active"  # not "disabled" from the extra field
     assert body["version"] == 2  # a normal single increment, not 99
     assert body["email"].lower() != "attacker-controlled@example.com"
+
+
+async def _audit_payloads_for_user(user_id: str) -> list[dict]:
+    from app.db import build_users_engine, build_users_session_factory
+    from app.settings import Settings
+
+    engine = build_users_engine(Settings())
+    factory = build_users_session_factory(engine)
+    async with factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT payload FROM outbox "
+                        "WHERE payload->>'type' = 'audit.recorded' "
+                        "AND aggregate_id = :user_id "
+                        "ORDER BY occurred_at"
+                    ),
+                    {"user_id": user_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    await engine.dispose()
+    return [row["payload"]["data"] for row in rows]
+
+
+def test_user_lifecycle_is_audited_at_platform_scope(client: TestClient) -> None:
+    import asyncio
+
+    user_id = client.post("/internal/v1/users:provision", json=_unique_identity()).json()["user_id"]
+    admin_id = _as_platform_admin(client)
+    client.post(f"/v1/platform/users/{user_id}:disable", json={"reason": "fraud investigation"})
+    client.post(f"/v1/platform/users/{user_id}:reactivate")
+
+    audits = asyncio.run(_audit_payloads_for_user(user_id))
+
+    assert [a["action"] for a in audits] == [
+        "user.provisioned",
+        "user.disabled",
+        "user.reactivated",
+    ]
+    assert all(a["domain"] == "platform" and a["audit_id"] for a in audits)
+    # Self-provisioned on first login; the lifecycle changes are the admin's.
+    assert audits[0]["actor"] == {"type": "user", "id": user_id}
+    assert audits[1]["actor"] == {"type": "user", "id": str(admin_id)}
+    assert audits[1]["reason"] == "fraud investigation"
+    assert audits[1]["changes"] == {"status": {"to": "disabled"}}
