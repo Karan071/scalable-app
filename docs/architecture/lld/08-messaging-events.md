@@ -303,9 +303,9 @@ PRD §6.1, §6.2, §6.3 (all bullets); PRD §4.4 (async rules, trace propagation
 | --- | --- |
 | `outbox_pending` | `service` |
 | `outbox_oldest_unpublished_age_seconds` | `service` |
-| `outbox_publish_total` | `service`, `result` (confirmed, nacked, returned, error) |
+| `outbox_publish_total` | `service`, `result` (confirmed, no_subscriber, returned, nacked, error). `no_subscriber` = an `sf.events` message nothing is bound to yet, marked published (§5.3); `returned` = an unroutable `sf.commands` message, retried |
 | `outbox_publish_latency_seconds` | `service` (commit → confirm) |
-| `consumer_messages_total` | `consumer`, `type`, `result` (processed, duplicate, retried, dead_lettered) |
+| `consumer_messages_total` | `consumer`, `type`, `result` (processed, duplicate, retried, dead_lettered). Until M4's retry tiers, every handler failure is `dead_lettered` (nack without requeue) and `retried` never occurs |
 | `consumer_processing_duration_seconds` | `consumer`, `type` |
 | `consumer_retry_total` | `consumer`, `tier` |
 | `queue_depth`, `dlq_depth` | `queue` (from the RabbitMQ Prometheus plugin) |

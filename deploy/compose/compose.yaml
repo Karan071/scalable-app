@@ -278,9 +278,33 @@ services:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
       - "16686:16686" # UI
+    # OTLP reaches Jaeger only through otel-collector (internal jaeger:4317).
+    # No healthcheck: same reasoning as mailpit above.
+
+  otel-collector:
+    # Single local Collector (LLD-10 §5). Owns host 4317/4318, the SDK's
+    # default OTLP endpoint, so services need no config: traces -> Jaeger,
+    # metrics -> Prometheus.
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - jaeger
+    ports:
       - "4317:4317" # OTLP gRPC
       - "4318:4318" # OTLP HTTP
-    # No healthcheck: same reasoning as mailpit above.
+      - "13133:13133" # health_check extension
+    # No healthcheck: distroless image (no shell); 13133 is for manual checks.
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - otel-collector
+    ports:
+      - "9090:9090" # UI + API
 
 volumes:
   pgdata:

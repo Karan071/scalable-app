@@ -14,6 +14,7 @@ dead-letter into.
 import json
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import UUID
@@ -22,6 +23,8 @@ import aio_pika
 from opentelemetry import propagate, trace
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from . import metrics as _metrics
 
 logger = logging.getLogger("sf_messaging.consumer")
 _tracer = trace.get_tracer(__name__)
@@ -90,6 +93,7 @@ class InboxConsumer:
             self._consumer_tag = None
 
     async def _on_message(self, message: aio_pika.abc.AbstractIncomingMessage) -> None:
+        started = time.monotonic()
         event_type = "<unparsed>"
         message_id: UUID | None = None
         try:
@@ -129,6 +133,7 @@ class InboxConsumer:
                         # commit, ack.
 
             await message.ack()
+            self._record(event_type, "duplicate" if is_duplicate else "processed", started)
             if is_duplicate:
                 logger.debug(
                     "duplicate message %s for consumer %s, acked without reprocessing",
@@ -145,3 +150,9 @@ class InboxConsumer:
                 self._consumer_name,
             )
             await message.nack(requeue=False)
+            self._record(event_type, "dead_lettered", started)
+
+    def _record(self, event_type: str, result: str, started: float) -> None:
+        labels = {"consumer": self._consumer_name, "type": event_type}
+        _metrics.consumer_messages_total.add(1, {**labels, "result": result})
+        _metrics.consumer_processing_duration_seconds.record(time.monotonic() - started, labels)

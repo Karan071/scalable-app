@@ -1,0 +1,43 @@
+# Single Collector for local Compose (LLD-10 §5: "M2–M5 (Compose) use a
+# single Collector container exporting to Jaeger all-in-one plus
+# Prometheus"). The agent/gateway tiers, tail sampling, and redaction
+# processors land with E6.1.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  batch: {}
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  # Scraped by Prometheus. Each series keeps the producing service as
+  # job="scaleforge/<service.name>" (Prometheus scrapes with honor_labels).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]

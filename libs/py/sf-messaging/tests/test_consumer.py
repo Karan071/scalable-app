@@ -71,7 +71,7 @@ async def test_exchange_and_queue():
 
 
 async def test_consumer_dedupes_and_dispatches_by_type(
-    session_factory: async_sessionmaker[AsyncSession], test_exchange_and_queue
+    session_factory: async_sessionmaker[AsyncSession], test_exchange_and_queue, read_metric
 ) -> None:
     exchange, queue_name = test_exchange_and_queue
     consumer_name = f"test.consumer.{uuid4().hex[:8]}"
@@ -145,9 +145,17 @@ async def test_consumer_dedupes_and_dispatches_by_type(
     assert handled[0]["id"] == envelope["id"]
     assert on_handled_values == [99]
 
+    # LLD-08 §13: an unhandled type is still acked and committed -- processed.
+    by = dict(consumer=consumer_name)
+    total = "consumer_messages_total"
+    assert read_metric(total, **by, type="gadget.created", result="processed") == 1
+    assert read_metric(total, **by, type="gadget.created", result="duplicate") == 1
+    assert read_metric(total, **by, type="gadget.updated", result="processed") == 1
+    assert read_metric("consumer_processing_duration_seconds", **by) == 3
+
 
 async def test_consumer_nacks_without_requeue_on_handler_exception(
-    session_factory: async_sessionmaker[AsyncSession], test_exchange_and_queue
+    session_factory: async_sessionmaker[AsyncSession], test_exchange_and_queue, read_metric
 ) -> None:
     exchange, queue_name = test_exchange_and_queue
     consumer_name = f"test.consumer.{uuid4().hex[:8]}"
@@ -190,3 +198,12 @@ async def test_consumer_nacks_without_requeue_on_handler_exception(
     # requeue=False means no redelivery to this queue; the handler ran exactly once,
     # not repeatedly (which a requeue=True nack would have caused).
     assert attempts == 1
+    assert (
+        read_metric(
+            "consumer_messages_total",
+            consumer=consumer_name,
+            type="gadget.created",
+            result="dead_lettered",
+        )
+        == 1
+    )

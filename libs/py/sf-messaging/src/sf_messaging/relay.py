@@ -13,6 +13,8 @@ import json
 import logging
 import random
 import re
+import time
+from datetime import UTC, datetime
 from typing import Any
 
 import aio_pika
@@ -20,6 +22,8 @@ import asyncpg
 from opentelemetry import trace
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from . import metrics as _metrics
 
 logger = logging.getLogger("sf_messaging.relay")
 _tracer = trace.get_tracer(__name__)
@@ -33,6 +37,7 @@ _VALID_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*$")
 DEFAULT_BATCH_SIZE = 200
 DEFAULT_POLL_INTERVAL_S = 0.25
 DEFAULT_CONFIRM_TIMEOUT_S = 5.0
+DEFAULT_BACKLOG_REFRESH_S = 5.0
 
 _EVENTS_EXCHANGE = "sf.events"
 _AMQP_NO_ROUTE = 312
@@ -42,7 +47,7 @@ _AMQP_NO_ROUTE = 312
 # Ordering by `occurred_at` alone let 200 unroutable rows block orgs-svc's
 # relay completely (2026-10-21 .. 10-23).
 _CLAIM_SQL_TEMPLATE = """
-    SELECT id, exchange, routing_key, payload
+    SELECT id, exchange, routing_key, payload, occurred_at
     FROM {table}
     WHERE published_at IS NULL
     ORDER BY attempts, occurred_at, id
@@ -55,6 +60,9 @@ _MARK_PUBLISHED_SQL_TEMPLATE = "UPDATE {table} SET published_at = now() WHERE id
 _MARK_FAILED_SQL_TEMPLATE = (
     "UPDATE {table} SET attempts = attempts + 1, last_error = :error WHERE id = :id"
 )
+
+# Served by the partial index on unpublished rows (LLD-08 §5.1).
+_BACKLOG_SQL_TEMPLATE = "SELECT count(*), min(occurred_at) FROM {table} WHERE published_at IS NULL"
 
 
 class OutboxRelay:
@@ -72,6 +80,7 @@ class OutboxRelay:
         batch_size: int = DEFAULT_BATCH_SIZE,
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         confirm_timeout_s: float = DEFAULT_CONFIRM_TIMEOUT_S,
+        backlog_refresh_s: float = DEFAULT_BACKLOG_REFRESH_S,
     ) -> None:
         if not _VALID_IDENTIFIER.match(notify_channel):
             raise ValueError(f"not a safe NOTIFY channel name: {notify_channel!r}")
@@ -87,12 +96,15 @@ class OutboxRelay:
         self._batch_size = batch_size
         self._poll_interval_s = poll_interval_s
         self._confirm_timeout_s = confirm_timeout_s
+        self._backlog_refresh_s = backlog_refresh_s
+        self._backlog_refreshed_at = 0.0
 
         self._claim_sql = text(_CLAIM_SQL_TEMPLATE.format(table=outbox_table))
         self._mark_published_sql = text(
             _MARK_PUBLISHED_SQL_TEMPLATE.format(table=outbox_table)
         ).bindparams(bindparam("ids", expanding=True))
         self._mark_failed_sql = text(_MARK_FAILED_SQL_TEMPLATE.format(table=outbox_table))
+        self._backlog_sql = text(_BACKLOG_SQL_TEMPLATE.format(table=outbox_table))
 
         self._wake = asyncio.Event()
         self._stopped = False
@@ -165,11 +177,23 @@ class OutboxRelay:
             self._wake.clear()  # clear before processing: avoid a missed-notify race
             try:
                 await self._drain_once()
+                await self._maybe_refresh_backlog()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("outbox relay batch failed; backing off")
                 await asyncio.sleep(1.0)
+
+    async def _maybe_refresh_backlog(self) -> None:
+        now = time.monotonic()
+        if now - self._backlog_refreshed_at < self._backlog_refresh_s:
+            return
+        self._backlog_refreshed_at = now
+        async with self._session_factory() as session:
+            pending, oldest = (await session.execute(self._backlog_sql)).one()
+        _metrics.record_backlog(
+            self._service_name, pending=int(pending), oldest_unpublished_at=oldest
+        )
 
     async def _drain_once(self) -> None:
         # One span per batch tick, not per row (LLD-10 §2) -- each row's own
@@ -224,12 +248,16 @@ class OutboxRelay:
                 mandatory=True,
                 timeout=self._confirm_timeout_s,
             )
+            self._count("confirmed")
+            _metrics.outbox_publish_latency_seconds.record(
+                max((datetime.now(UTC) - row["occurred_at"]).total_seconds(), 0.0),
+                {"service": self._service_name},
+            )
             return None
         except aio_pika.exceptions.DeliveryError as exc:
-            if (
-                row["exchange"] == _EVENTS_EXCHANGE
-                and getattr(exc.frame, "reply_code", None) == _AMQP_NO_ROUTE
-            ):
+            returned = getattr(exc.frame, "reply_code", None) == _AMQP_NO_ROUTE
+            if row["exchange"] == _EVENTS_EXCHANGE and returned:
+                self._count("no_subscriber")
                 # An event with no subscriber yet (e.g. invitation.created
                 # before notifications-svc exists) is ordinary pub/sub, not a
                 # failure: done, not retried. Commands still fail on NO_ROUTE
@@ -242,11 +270,16 @@ class OutboxRelay:
                 )
                 return None
             # A nack, or an unroutable command: keep retrying, log loudly.
+            self._count("returned" if returned else "nacked")
             logger.error("outbox relay delivery failed for %s: %s", row["id"], exc)
             return f"delivery_error: {exc}"
         except Exception as exc:
+            self._count("error")
             logger.exception("outbox relay publish failed for %s", row["id"])
             return str(exc)
+
+    def _count(self, result: str) -> None:
+        _metrics.outbox_publish_total.add(1, {"service": self._service_name, "result": result})
 
     async def _get_exchange(self, name: str) -> aio_pika.abc.AbstractExchange:
         if name not in self._exchange_cache:

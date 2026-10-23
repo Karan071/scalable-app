@@ -251,9 +251,14 @@ async def _row_state(
     return row[0], row[1], row[2]
 
 
-def _relay(session_factory: async_sessionmaker[AsyncSession], **kwargs: object) -> OutboxRelay:
+def _relay(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    service_name: str = "test",
+    **kwargs: object,
+) -> OutboxRelay:
     return OutboxRelay(
-        service_name="test",
+        service_name=service_name,
         session_factory=session_factory,
         dsn_asyncpg=_DSN_ASYNCPG,
         amqp_url=_AMQP_URL,
@@ -265,12 +270,13 @@ def _relay(session_factory: async_sessionmaker[AsyncSession], **kwargs: object) 
 
 
 async def test_an_event_with_no_bound_queue_is_marked_published_not_retried(
-    session_factory: async_sessionmaker[AsyncSession], test_queue
+    session_factory: async_sessionmaker[AsyncSession], test_queue, read_metric
 ) -> None:
     row_id = await _insert_row(
         session_factory, exchange="sf.events", routing_key=f"nobody.{uuid4().hex}.v1"
     )
-    relay = _relay(session_factory)
+    service = f"svc-{uuid4().hex[:8]}"
+    relay = _relay(session_factory, service_name=service)
     await relay.start()
     try:
         await asyncio.sleep(0.6)
@@ -281,15 +287,17 @@ async def test_an_event_with_no_bound_queue_is_marked_published_not_retried(
     assert published_at is not None
     assert attempts == 0
     assert last_error is None
+    assert read_metric("outbox_publish_total", service=service, result="no_subscriber") == 1
 
 
 async def test_a_command_with_no_bound_queue_stays_unpublished_and_is_retried(
-    session_factory: async_sessionmaker[AsyncSession], test_queue
+    session_factory: async_sessionmaker[AsyncSession], test_queue, read_metric
 ) -> None:
     row_id = await _insert_row(
         session_factory, exchange="sf.commands", routing_key=f"nobody.{uuid4().hex}.v1"
     )
-    relay = _relay(session_factory)
+    service = f"svc-{uuid4().hex[:8]}"
+    relay = _relay(session_factory, service_name=service)
     await relay.start()
     try:
         await asyncio.sleep(0.6)
@@ -300,6 +308,8 @@ async def test_a_command_with_no_bound_queue_stays_unpublished_and_is_retried(
     assert published_at is None
     assert attempts >= 1
     assert last_error is not None and "NO_ROUTE" in last_error
+    assert read_metric("outbox_publish_total", service=service, result="returned") >= 1
+    assert read_metric("outbox_publish_total", service=service, result="confirmed") == 0
 
 
 async def test_rows_that_keep_failing_cannot_starve_newer_ones(
@@ -328,3 +338,27 @@ async def test_rows_that_keep_failing_cannot_starve_newer_ones(
 
     assert body is not None
     assert json.loads(body)["id"] == fresh_id
+
+
+async def test_relay_reports_publish_latency_and_drains_the_backlog_gauges(
+    session_factory: async_sessionmaker[AsyncSession], test_queue, read_metric
+) -> None:
+    await _insert_row(
+        session_factory,
+        exchange="sf.events",
+        routing_key="widget.created.v1",
+        occurred_at_sql="now() - interval '2 seconds'",
+    )
+    service = f"svc-{uuid4().hex[:8]}"
+    relay = _relay(session_factory, service_name=service, backlog_refresh_s=0.0)
+    await relay.start()
+    try:
+        assert await _consume_one(test_queue, timeout_s=5) is not None
+        await asyncio.sleep(0.4)  # a few more ticks: the backlog refresh after the drain
+    finally:
+        await relay.stop()
+
+    assert read_metric("outbox_publish_total", service=service, result="confirmed") == 1
+    assert read_metric("outbox_publish_latency_seconds", service=service) == 1
+    assert read_metric("outbox_pending", service=service) == 0
+    assert read_metric("outbox_oldest_unpublished_age_seconds", service=service) == 0

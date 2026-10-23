@@ -61,7 +61,8 @@ docker compose -f deploy/compose/compose.yaml --env-file .env ps
 ```
 
 Expect `postgres`, `adminer`, `redis-session`, `redis-cache`, `rabbitmq`,
-`keycloak` as `Up (healthy)`. `keycloak-config-cli` and `rabbitmq-topology`
+`keycloak` as `Up (healthy)`, and `mailpit`, `jaeger`, `otel-collector`,
+`prometheus` as plain `Up` (no healthchecks). `keycloak-config-cli` and `rabbitmq-topology`
 are one-shot jobs — they should show `Exited (0)`, not `Up`. Give Keycloak
 30–60s before its healthcheck passes; `keycloak-config-cli` won't even start
 until it does.
@@ -138,10 +139,24 @@ to `sf.events` on `membership.*.v1`, `organization.*.v1`, `user.created.v1`,
 Open <http://localhost:8025>. No login. Empty inbox is correct — nothing
 sends mail yet.
 
-## 8. Jaeger
+## 8. Telemetry: Collector, Jaeger, Prometheus
 
-Open <http://localhost:16686>. No login. No traces yet — nothing emits
-spans yet (OTel wiring is epic E2.11).
+Services export OTLP to `localhost:4317`, the SDK default, so they need no
+config. That port belongs to `otel-collector` (LLD-10 §5), which forwards
+traces to Jaeger and serves metrics for Prometheus to scrape.
+
+| What | Where | Check |
+| --- | --- | --- |
+| Collector | `:4317` gRPC, `:4318` HTTP | `curl -s localhost:13133/` → `"Server available"` |
+| Traces | Jaeger UI <http://localhost:16686> | Services appear in the Service dropdown once they've handled a request |
+| Metrics | Prometheus <http://localhost:9090> | Query `outbox_oldest_unpublished_age_seconds` (LLD-08 §11 alerts above 60) |
+
+Metrics export every 60 s by default. Set `OTEL_METRIC_EXPORT_INTERVAL=5000`
+on a service to see them sooner. Series carry `job="scaleforge/<service>"`.
+
+Telemetry is never a hard dependency: with the Collector down, services
+run normally and exit within a few seconds (each OTLP export gives up
+after 2 s).
 
 ## 9. Keycloak
 
@@ -185,4 +200,4 @@ docker compose -f deploy/compose/compose.yaml --env-file .env down -v
 | --- | --- |
 | RabbitMQ login fails with correct-looking credentials | Stale data volume from before a config fix. Recreate it: `docker compose -f deploy/compose/compose.yaml --env-file .env rm -sf rabbitmq && docker volume rm compose_rabbitmq-data && docker compose -f deploy/compose/compose.yaml --env-file .env up -d` |
 | `keycloak-config-cli` exits non-zero | Check its logs; usually Keycloak wasn't actually healthy yet, or a client/role in `realm-scaleforge.json` conflicts with existing realm state from a previous run |
-| A container shows `unhealthy` forever | `mailpit` and `jaeger` have no healthchecks on purpose (minimal images, nothing depends on them) — if you see `unhealthy` on one of those two, you're looking at stale container state; recreate it |
+| A container shows `unhealthy` forever | `mailpit`, `jaeger`, and `otel-collector` have no healthchecks on purpose (minimal images, nothing depends on them) — if you see `unhealthy` on one of those, you're looking at stale container state; recreate it |
