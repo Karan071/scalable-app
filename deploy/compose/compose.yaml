@@ -228,16 +228,19 @@ services:
           -H 'content-type: application/json' \
           -d '{"routing_key":"user.disabled.v1"}'
 
-        # q.users.commands (E2.8, LLD-08 §4.2): users-svc consumes
-        # identity.mfa_group_sync_requested.v1, sent by authz-svc on the
-        # sf.commands exchange -- not sf.events, unlike every queue above.
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands.dlq" \
+        # q.authz.commands (E2.8, LLD-01 §9 accepted text): authz-svc
+        # self-consumes identity.mfa_group_sync_requested.v1 on the
+        # sf.commands exchange -- not sf.events, unlike every queue above --
+        # to call Keycloak's admin API directly via its own sf-authz-admin
+        # client. (LLD-02/08's draft "handler: users" row predates this and
+        # needs updating -- see those docs' own notes.)
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.authz.commands.dlq" \
           -H 'content-type: application/json' \
           -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands" \
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.authz.commands" \
           -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.users.commands.dlq"}}'
-        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.commands/q/q.users.commands" \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.authz.commands.dlq"}}'
+        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.commands/q/q.authz.commands" \
           -H 'content-type: application/json' \
           -d '{"routing_key":"identity.mfa_group_sync_requested.v1"}'
     restart: "no"

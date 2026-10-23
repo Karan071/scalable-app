@@ -19,6 +19,8 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SF_SVC_AUTHZ_CLIENT_SECRET", "test-authz-secret")
 os.environ.setdefault("SF_ORGS_SVC_BASE_URL", "https://orgs.test")
+os.environ.setdefault("SF_KEYCLOAK_ADMIN_BASE_URL", "https://kc.test/admin/realms/scaleforge")
+os.environ.setdefault("SF_KEYCLOAK_ADMIN_CLIENT_SECRET", "test-authz-admin-secret")
 os.environ.setdefault("SF_REDIS_CACHE_URL", "redis://localhost:6380/0")
 os.environ.setdefault("SF_RABBITMQ_USER", "scaleforge")
 os.environ.setdefault("SF_RABBITMQ_PASSWORD", "rabbitmq_local_dev")

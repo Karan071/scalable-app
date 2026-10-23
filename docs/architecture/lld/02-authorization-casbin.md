@@ -186,7 +186,7 @@ flowchart TD
 3. Insert into `role_assignments`.
 4. Insert the `g` row into `casbin_rule`.
 5. `UPDATE policy_version SET version = version + 1 RETURNING version`.
-6. Insert outbox rows: `membership.role_changed.v1` and `audit.recorded.v1`. If the role `requires_mfa`, also insert the command `identity.mfa_group_sync_requested.v1`.
+6. Insert outbox rows: `membership.role_changed.v1` and `audit.recorded.v1`. If the role `requires_mfa`, also insert the command `identity.mfa_group_sync_requested.v1` — self-consumed by authz-svc on `q.authz.commands` (LLD-01 §9, accepted), not by users-svc (correction: this row previously said "handler: users" in LLD-08 §4.2, which conflicted with LLD-01's already-accepted text and the realm's dedicated `sf-authz-admin` client).
 7. Commit.
 8. After commit: `PUBLISH authz:policy <version>` (best effort).
 

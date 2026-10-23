@@ -23,6 +23,13 @@ class Settings(BaseServiceSettings):
 
     orgs_svc_base_url: str
 
+    # Keycloak Admin REST API access for mfa-required group membership
+    # (LLD-01 §3.1, §9, accepted): a dedicated client-credentials client,
+    # never the realm admin, distinct from users-svc's own sf-users-admin.
+    keycloak_admin_base_url: str
+    keycloak_admin_client_id: str = "sf-authz-admin"
+    keycloak_admin_client_secret: str
+
     redis_cache_url: str = "redis://localhost:6380/0"
 
     # Outbox relay + inbox consumer (LLD-08 §5-§6, E2.8). Shared admin-ish

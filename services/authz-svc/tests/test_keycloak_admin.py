@@ -1,5 +1,5 @@
-"""``KeycloakAdminClient.add_user_to_group`` against a mocked transport --
-no real Keycloak involved, just the group-id lookup/cache/join sequence."""
+"""``KeycloakAdminClient`` (authz-svc's own, sf-authz-admin-credentialed)
+against a mocked transport -- no real Keycloak involved."""
 
 from collections.abc import Callable
 
@@ -14,13 +14,40 @@ def _client(handler: Callable[[httpx.Request], httpx.Response]) -> KeycloakAdmin
         http_client,
         admin_base_url="https://kc.test/admin/realms/scaleforge",
         token_endpoint="https://kc.test/realms/scaleforge/protocol/openid-connect/token",
-        client_id="sf-users-admin",
+        client_id="sf-authz-admin",
         client_secret="secret",
     )
 
 
 def _token_response() -> httpx.Response:
     return httpx.Response(200, json={"access_token": "tok", "expires_in": 300})
+
+
+async def test_find_keycloak_id_by_sf_uid_queries_the_attribute() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return _token_response()
+        if request.url.path.endswith("/admin/realms/scaleforge/users"):
+            assert request.url.params["q"] == "sf_uid:abc-123"
+            return httpx.Response(200, json=[{"id": "kc-user-1"}])
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _client(handler)
+    keycloak_id = await client.find_keycloak_id_by_sf_uid("abc-123")
+
+    assert keycloak_id == "kc-user-1"
+
+
+async def test_find_keycloak_id_by_sf_uid_returns_none_when_no_match() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return _token_response()
+        if request.url.path.endswith("/users"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = _client(handler)
+    assert await client.find_keycloak_id_by_sf_uid("no-such-user") is None
 
 
 async def test_add_user_to_group_resolves_group_id_then_joins() -> None:

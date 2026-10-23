@@ -25,8 +25,9 @@ from sf_common import (
 from sf_messaging import InboxConsumer, OutboxRelay
 from sqlalchemy import text
 
-from . import event_handlers
+from . import command_handlers, event_handlers
 from .db import build_authz_engine, build_authz_reader_enforcer, build_authz_session_factory
+from .keycloak_admin import KeycloakAdminClient
 from .orgs_client import OrgsClient, ServiceTokenSource
 from .routes import router
 from .settings import Settings
@@ -108,8 +109,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await consumer.start()
     app.state.consumer = consumer
 
+    keycloak_admin = KeycloakAdminClient(
+        http_client,
+        admin_base_url=settings.keycloak_admin_base_url,
+        token_endpoint=settings.oidc_token_endpoint,
+        client_id=settings.keycloak_admin_client_id,
+        client_secret=settings.keycloak_admin_client_secret,
+    )
+    commands_consumer = InboxConsumer(
+        consumer_name=command_handlers.CONSUMER_NAME,
+        session_factory=session_factory,
+        amqp_url=_amqp_url(settings),
+        queue_name="q.authz.commands",
+        handlers=command_handlers.build_dispatch(keycloak_admin),
+    )
+    await commands_consumer.start()
+    app.state.commands_consumer = commands_consumer
+
     yield
 
+    await commands_consumer.stop()
     await consumer.stop()
     await relay.stop()
     await watcher.stop()
@@ -136,7 +155,11 @@ async def _authz_ready() -> bool:
 
 async def _relay_and_consumer_ready() -> bool:
     try:
-        return app.state.relay.is_running and app.state.consumer.is_running
+        return (
+            app.state.relay.is_running
+            and app.state.consumer.is_running
+            and app.state.commands_consumer.is_running
+        )
     except Exception:
         return False
 
