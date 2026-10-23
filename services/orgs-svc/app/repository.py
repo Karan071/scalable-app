@@ -8,14 +8,20 @@ org/member/invitation counts per tenant are small in practice for now).
 from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
+from sf_db import violated_unique_constraint
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Invitation, Membership, Organization
 
 
 class VersionConflict(Exception):
+    pass
+
+
+class SlugTaken(Exception):
     pass
 
 
@@ -49,7 +55,12 @@ async def insert_organization(
         version=1,
     )
     session.add(org)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        if violated_unique_constraint(exc) == "uq_organizations_slug":
+            raise SlugTaken(slug) from exc
+        raise
     return org
 
 

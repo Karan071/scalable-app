@@ -5,10 +5,18 @@ instruments bind to it. Readings are cumulative across the session: tests
 filter by a unique ``service``/``consumer`` label, never by totals.
 """
 
+import os
+
 import pytest
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+# Isolated test environment (`make test-env`), never the dev DB or vhost.
+os.environ.setdefault("SF_TEST_DB_NAME", "scaleforge_test")
+os.environ.setdefault(
+    "SF_TEST_AMQP_URL", "amqp://scaleforge:rabbitmq_local_dev@localhost:5672/scaleforge-test"
+)
 
 _reader = InMemoryMetricReader()
 metrics.set_meter_provider(MeterProvider(metric_readers=[_reader]))

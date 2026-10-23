@@ -26,7 +26,7 @@
 | Purpose | Tools |
 | --- | --- |
 | Python tests | pytest, pytest-asyncio, Hypothesis (property tests: pricing, state machines, cursor encoding), respx (httpx mocking) |
-| Real dependencies | Testcontainers (PostgreSQL, Redis, RabbitMQ, Keycloak, MinIO) |
+| Real dependencies | Testcontainers (PostgreSQL, Redis, RabbitMQ, Keycloak, MinIO). **Interim (M2):** integration tests run against an isolated database (`scaleforge_test`), RabbitMQ vhost (`scaleforge-test`), and Redis DB index on the Compose stack, rebuilt from scratch by `make test-env` before every `make test`. Tests never share state with the dev environment. Still pending: Testcontainers for CI (E5.5), where no Compose stack runs. Keycloak is faked in service tests. |
 | Contract | Schemathesis (OpenAPI-driven fuzzing and conformance), JSON Schema validation for events, OpenAPI diff |
 | Frontend | Vitest + Testing Library, MSW for API mocks, axe for accessibility smoke |
 | E2E | Playwright (Chromium + WebKit), TOTP helper for MFA flows |

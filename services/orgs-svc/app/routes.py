@@ -161,6 +161,8 @@ async def create_organization(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except repository.SlugTaken as exc:
+        raise HTTPException(status_code=409, detail="this store slug is already taken") from exc
     return _org_out(created.organization)
 
 

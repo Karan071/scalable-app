@@ -24,7 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 _AMQP_URL = os.environ.get(
     "SF_TEST_AMQP_URL",
     f"amqp://{os.environ.get('SF_RABBITMQ_USER', 'scaleforge')}:"
-    f"{os.environ.get('SF_RABBITMQ_PASSWORD', 'rabbitmq_local_dev')}@localhost:5672/",
+    f"{os.environ.get('SF_RABBITMQ_PASSWORD', 'rabbitmq_local_dev')}@localhost:5672/"
+    f"{os.environ['SF_RABBITMQ_VHOST']}",
 )
 
 

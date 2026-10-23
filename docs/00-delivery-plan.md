@@ -89,6 +89,8 @@ Epics are planning units, not tickets. Each epic cites the design section that g
 
 **Exit evidence:** secure login with MFA through the BFF. No tokens reach the browser (automated check). Sessions work across 2 BFF replicas. Logout and admin revocation are verified. The tenant-isolation suite passes. Role-revocation latency is measured against its target (LLD-02 §8).
 
+**Evidence so far:** role-revocation latency measured 2026-10-23 with all three LLD-02 §8 targets met (p99: direct 0.27 s, membership-disabled 0.31 s, watcher-off 10.1 s) — [report](reports/perf/2026-10-23-revocation-latency.md), reproducible with `make test-revocation-latency`.
+
 > **Deviation from the PRD milestone table:** the PRD lists messaging under M4. M2 introduces RabbitMQ and the transactional outbox **only** for identity events (membership/role changes → policy, audit). Doing this in M2 avoids building a synchronous revocation path that M4 would then throw away. Retry tiers, DLQ tooling, and sagas stay in M4.
 
 ### M3 — Commerce

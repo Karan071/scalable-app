@@ -186,7 +186,42 @@ check its logs (step 3).
 > the bottom of `keycloak/realm-scaleforge.json`), so there's nothing to test
 > around conditional OTP yet.
 
-## 10. Tear down
+## 10. Tests and the isolated test environment
+
+`make test` never touches the dev database, queues, or sessions. It first
+runs `make test-env`, which rebuilds a separate environment on the same
+servers **from scratch** (so no state leaks between runs, and every
+migration is re-checked against an empty database):
+
+| Dev (`make dev`, your services) | Tests (`make test-env`) |
+| --- | --- |
+| Postgres DB `scaleforge` | Postgres DB `scaleforge_test` |
+| RabbitMQ vhost `/` | RabbitMQ vhost `scaleforge-test` (same topology) |
+| redis-session / redis-cache DB 0 | DB 1 |
+
+Every test conftest defaults to the right-hand column. Running a single
+suite directly (`pytest services/<svc>/tests`) needs `make test-env` once
+first. Without it the test DB is missing and the integration tests skip.
+
+**System tests** (`tests/system/`) run real service processes together,
+which no per-service suite can: every service's package is named `app`, so
+two can't share one interpreter. They use the same test environment plus a
+fake OIDC IdP (JWKS and token endpoint) in place of Keycloak, so no
+production code is bypassed. `make test-revocation-latency` measures LLD-02
+§8's revocation targets and writes a report to `docs/reports/perf/`. It's
+slow (minutes) and is not part of `make test`. Service logs go to
+`.local/system-tests/`.
+
+`make migrate` applies every service's migrations to the dev DB
+(`make migrate DB=<name>` for another).
+
+**Resetting dev data:** `make dev-db-reset CONFIRM=yes`. It backs up the
+dev DB to `.local/backups/` (gitignored), rebuilds `scaleforge` from
+migrations, empties the dev queues, and clears dev sessions. The
+`keycloak` database is not touched; dev users are re-provisioned on their
+next login. Restart running services afterwards.
+
+## 11. Tear down
 
 ```sh
 make dev-down     # stops containers, keeps named volumes (data persists)

@@ -142,16 +142,8 @@ services:
       retries: 10
 
   rabbitmq-topology:
-    # Declares exchanges, queues, and bindings (ADR-0003, LLD-08 §2) via the
-    # management HTTP API, against the real broker credentials, instead of a
-    # mounted definitions.json — that approach silently disables RabbitMQ's
-    # own RABBITMQ_DEFAULT_USER seeding (see git history / commit message
-    # for the incident this replaced).
-    #
-    # Everything here runs on the default `/` vhost under the single shared
-    # admin credential pair. Per-service RabbitMQ users/vhosts (LLD-08 §2's
-    # "one RabbitMQ user per service") are a deliberate, already-agreed
-    # deferral to a future ADR-0003 revisit, not an oversight.
+    # One-shot: declares exchanges, queues, and bindings (LLD-08 §2) on
+    # RABBITMQ_VHOST ("/" here). `make test-env` reruns it for the test vhost.
     image: curlimages/curl:8.11.0
     depends_on:
       rabbitmq:
@@ -159,103 +151,10 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        set -e
-        AUTH="-u $$RABBITMQ_DEFAULT_USER:$$RABBITMQ_DEFAULT_PASS"
-        API=http://rabbitmq:15672/api
-
-        # Exchanges (ADR-0003): sf.events carries facts, sf.commands carries
-        # requests with one intended consumer (authz-svc's
-        # identity.mfa_group_sync_requested.v1, E2.8).
-        curl -sf $$AUTH -X PUT "$$API/exchanges/%2F/sf.events" \
-          -H 'content-type: application/json' \
-          -d '{"type":"topic","durable":true}'
-        curl -sf $$AUTH -X PUT "$$API/exchanges/%2F/sf.commands" \
-          -H 'content-type: application/json' \
-          -d '{"type":"topic","durable":true}'
-
-        # q.authz.identity (E2.8): the only real consumer queue this
-        # milestone needs. DLQ first, since the main queue's
-        # x-dead-letter-routing-key names it.
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.authz.identity.dlq" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.authz.identity" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.authz.identity.dlq"}}'
-
-        # Bindings for q.authz.identity (LLD-08 §2.1).
-        for key in "membership.*.v1" "organization.*.v1" "user.created.v1" "user.disabled.v1" "user.reactivated.v1"; do
-          curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.authz.identity" \
-            -H 'content-type: application/json' \
-            -d "{\"routing_key\":\"$$key\"}"
-        done
-
-        # q.audit.ingest (E2.9): audit-svc consumes audit.recorded.v1 events.
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.audit.ingest.dlq" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.audit.ingest" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.audit.ingest.dlq"}}'
-        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.audit.ingest" \
-          -H 'content-type: application/json' \
-          -d '{"routing_key":"audit.recorded.v1"}'
-
-        # q.bff.identity (E2.12): the BFF consumes user.disabled.v1 to
-        # revoke all of a disabled user's sessions (LLD-01 §8).
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.bff.identity.dlq" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.bff.identity" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.bff.identity.dlq"}}'
-        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.bff.identity" \
-          -H 'content-type: application/json' \
-          -d '{"routing_key":"user.disabled.v1"}'
-
-        # q.orgs.users (E2.8, LLD-08 §2.1): orgs-svc consumes user.disabled.v1
-        # to disable the user's memberships in every org they belong to.
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.orgs.users.dlq" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.orgs.users" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.orgs.users.dlq"}}'
-        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.orgs.users" \
-          -H 'content-type: application/json' \
-          -d '{"routing_key":"user.disabled.v1"}'
-
-        # q.authz.commands (E2.8, LLD-01 §9 accepted text): authz-svc
-        # self-consumes identity.mfa_group_sync_requested.v1 on the
-        # sf.commands exchange -- not sf.events, unlike every queue above --
-        # to call Keycloak's admin API directly via its own sf-authz-admin
-        # client. (LLD-02/08's draft "handler: users" row predates this and
-        # needs updating -- see those docs' own notes.)
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.authz.commands.dlq" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.authz.commands" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.authz.commands.dlq"}}'
-        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.commands/q/q.authz.commands" \
-          -H 'content-type: application/json' \
-          -d '{"routing_key":"identity.mfa_group_sync_requested.v1"}'
-
-        # q.users.commands (E2.8, LLD-01 §11.2): users-svc self-consumes
-        # user.idp_sync_requested.v1 -- the retry path for the synchronous
-        # Keycloak sf_uid sync call (routes.py) when it fails.
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands.dlq" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
-        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands" \
-          -H 'content-type: application/json' \
-          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.users.commands.dlq"}}'
-        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.commands/q/q.users.commands" \
-          -H 'content-type: application/json' \
-          -d '{"routing_key":"user.idp_sync_requested.v1"}'
+      RABBITMQ_VHOST: /
+    volumes:
+      - ./rabbitmq/topology.sh:/topology.sh:ro
+    entrypoint: ["sh", "/topology.sh"]
     restart: "no"
 
   mailpit:

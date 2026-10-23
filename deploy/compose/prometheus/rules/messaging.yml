@@ -8,11 +8,12 @@ groups:
   - name: messaging
     rules:
       # LLD-08 §13's queue_depth/dlq_depth, from the RabbitMQ Prometheus
-      # plugin's per-queue metric (scraped from /metrics/detailed).
+      # plugin's per-queue metric (scraped from /metrics/detailed). `vhost`
+      # is kept: the test vhost shares the broker and must not alert.
       - record: queue_depth
-        expr: sum by (queue) (rabbitmq_detailed_queue_messages{queue!~".+\\.dlq"})
+        expr: sum by (vhost, queue) (rabbitmq_detailed_queue_messages{queue!~".+\\.dlq"})
       - record: dlq_depth
-        expr: sum by (queue) (rabbitmq_detailed_queue_messages{queue=~".+\\.dlq"})
+        expr: sum by (vhost, queue) (rabbitmq_detailed_queue_messages{queue=~".+\\.dlq"})
 
       - alert: OutboxLag
         # Every replica reports its own series; one alert per service.
@@ -28,7 +29,7 @@ groups:
           runbook_url: docs/runbooks/outbox-lag.md
 
       - alert: DLQNotEmpty
-        expr: dlq_depth{queue!="q.audit.ingest.dlq"} > 0
+        expr: dlq_depth{vhost!="scaleforge-test", queue!="q.audit.ingest.dlq"} > 0
         for: 10m
         labels:
           severity: ticket
@@ -39,7 +40,7 @@ groups:
       - alert: AuditDLQNotEmpty
         # LLD-04 §2.3: an audit DLQ alert is high priority -- every message
         # there is an audit record that was never stored.
-        expr: dlq_depth{queue="q.audit.ingest.dlq"} > 0
+        expr: dlq_depth{vhost!="scaleforge-test", queue="q.audit.ingest.dlq"} > 0
         for: 1m
         labels:
           severity: page

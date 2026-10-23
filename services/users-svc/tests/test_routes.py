@@ -308,7 +308,7 @@ async def _audit_payloads_for_user(user_id: str) -> list[dict]:
                         "SELECT payload FROM outbox "
                         "WHERE payload->>'type' = 'audit.recorded' "
                         "AND aggregate_id = :user_id "
-                        "ORDER BY occurred_at"
+                        "ORDER BY occurred_at, id"  # id: UUIDv7, ms ties
                     ),
                     {"user_id": user_id},
                 )

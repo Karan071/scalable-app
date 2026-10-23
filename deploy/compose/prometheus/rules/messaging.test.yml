@@ -45,21 +45,30 @@ tests:
         values: "0x15"
       - series: 'rabbitmq_detailed_queue_messages{vhost="/", queue="q.audit.ingest.dlq"}'
         values: "0 0 1x13"
+      # Test-run dead letters share the broker but must never alert.
+      - series: 'rabbitmq_detailed_queue_messages{vhost="scaleforge-test", queue="q.users.commands.dlq"}'
+        values: "16x15"
+      - series: 'rabbitmq_detailed_queue_messages{vhost="scaleforge-test", queue="q.audit.ingest.dlq"}'
+        values: "3x15"
     promql_expr_test:
       - expr: queue_depth
         eval_time: 1m
         exp_samples:
-          - labels: 'queue_depth{queue="q.users.commands"}'
+          - labels: 'queue_depth{vhost="/", queue="q.users.commands"}'
             value: 3
       - expr: dlq_depth
         eval_time: 1m
         exp_samples:
-          - labels: 'dlq_depth{queue="q.users.commands.dlq"}'
+          - labels: 'dlq_depth{vhost="/", queue="q.users.commands.dlq"}'
             value: 2
-          - labels: 'dlq_depth{queue="q.authz.identity.dlq"}'
+          - labels: 'dlq_depth{vhost="/", queue="q.authz.identity.dlq"}'
             value: 0
-          - labels: 'dlq_depth{queue="q.audit.ingest.dlq"}'
+          - labels: 'dlq_depth{vhost="/", queue="q.audit.ingest.dlq"}'
             value: 0
+          - labels: 'dlq_depth{vhost="scaleforge-test", queue="q.users.commands.dlq"}'
+            value: 16
+          - labels: 'dlq_depth{vhost="scaleforge-test", queue="q.audit.ingest.dlq"}'
+            value: 3
     alert_rule_test:
       - eval_time: 9m
         alertname: DLQNotEmpty
@@ -69,6 +78,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: ticket
+              vhost: /
               queue: q.users.commands.dlq
             exp_annotations:
               summary: "q.users.commands.dlq holds 2 dead-lettered message(s)"
@@ -81,6 +91,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: page
+              vhost: /
               queue: q.audit.ingest.dlq
             exp_annotations:
               summary: "1 audit event(s) dead-lettered: not in the audit trail"

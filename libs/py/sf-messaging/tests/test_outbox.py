@@ -1,9 +1,10 @@
-"""Integration test against the local Compose Postgres (LLD-08 §5).
+"""Integration test against the isolated test database (LLD-08 §5).
 
-Skips if that stack isn't up — `make dev`, then run with network access to
-localhost:5432 as `svc_users` (deploy/compose/postgres/init-schemas.sh).
+Skips if that stack isn't up — `make dev` then `make test-env`, then run
+with network access to localhost:5432 as `svc_users`.
 """
 
+import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -35,7 +36,7 @@ async def session() -> AsyncIterator[AsyncSession]:
     engine = build_engine(
         host="localhost",
         port=5432,
-        database="scaleforge",
+        database=os.environ["SF_TEST_DB_NAME"],
         user="svc_users",
         password="app_local_dev",
     )

@@ -159,6 +159,10 @@ async def assign_org_role(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except service.SelfGrantForbidden as exc:
         raise HTTPException(status_code=403, detail="cannot grant a role to yourself") from exc
+    except repository.AlreadyAssigned as exc:
+        raise HTTPException(
+            status_code=409, detail="the user already holds this role in this domain"
+        ) from exc
     await _publish_policy_version(request, result.policy_version)
     return _assignment_out(result.assignment)
 
@@ -255,6 +259,10 @@ async def assign_platform_role(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except service.SelfGrantForbidden as exc:
         raise HTTPException(status_code=403, detail="cannot grant a role to yourself") from exc
+    except repository.AlreadyAssigned as exc:
+        raise HTTPException(
+            status_code=409, detail="the user already holds this role in this domain"
+        ) from exc
     except (ValueError, PermissionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _publish_policy_version(request, result.policy_version)

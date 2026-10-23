@@ -5,6 +5,7 @@ unreachable (house convention).
 """
 
 import asyncio
+import os
 import time
 from collections.abc import AsyncIterator
 
@@ -19,7 +20,7 @@ _KEYS = {"k1": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}
 
 @pytest_asyncio.fixture
 async def store() -> AsyncIterator[SessionStore]:
-    redis: Redis = Redis.from_url("redis://localhost:6379/0", decode_responses=True)
+    redis: Redis = Redis.from_url(os.environ["SF_REDIS_SESSION_URL"], decode_responses=True)
     try:
         await redis.ping()
     except Exception as exc:

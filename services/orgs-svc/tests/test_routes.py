@@ -104,7 +104,7 @@ async def _decrypt_latest_invitation_token(org_id: str) -> tuple[str, str]:
                         "SELECT payload FROM outbox "
                         "WHERE payload->>'type' = 'invitation.created' "
                         "AND payload->'data'->>'org_id' = :org_id "
-                        "ORDER BY occurred_at DESC LIMIT 1"
+                        "ORDER BY occurred_at DESC, id DESC LIMIT 1"
                     ),
                     {"org_id": org_id},
                 )
@@ -449,7 +449,7 @@ async def _audit_payloads_for_org(org_id: str) -> list[dict]:
                         "SELECT payload FROM outbox "
                         "WHERE payload->>'type' = 'audit.recorded' "
                         "AND payload->>'sforgid' = :org_id "
-                        "ORDER BY occurred_at"
+                        "ORDER BY occurred_at, id"  # id: UUIDv7, ms ties
                     ),
                     {"org_id": org_id},
                 )
@@ -498,3 +498,20 @@ def test_org_lifecycle_is_audited_without_leaking_tokens_or_emails(client: TestC
     assert raw_token not in serialized
     assert "token" not in serialized
     assert owner_email not in serialized
+
+
+def test_creating_an_org_with_a_taken_slug_is_409_not_500(client: TestClient) -> None:
+    _as_user(uuid4())
+    body = {
+        "slug": _unique_slug(),
+        "name": "Test Store",
+        "currency": "usd",
+        "owner_email": "owner@example.com",
+    }
+
+    first = client.post("/v1/platform/orgs", json=body)
+    second = client.post("/v1/platform/orgs", json=body)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409, second.text
+    assert second.headers["content-type"] == "application/problem+json"

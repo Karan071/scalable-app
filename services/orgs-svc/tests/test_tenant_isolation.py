@@ -15,6 +15,7 @@ writes to) to run genuinely.
 """
 
 import asyncio
+import os
 from collections.abc import Iterator
 from uuid import UUID, uuid4, uuid7
 
@@ -27,8 +28,12 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # Local-dev-only: every svc_* role shares POSTGRES_APP_PASSWORD (init-schemas.sh).
 # orgs-svc's own Settings only has read-only authz_reader creds, so granting
 # roles for this test needs svc_authz's write access directly.
-_AUTHZ_WRITE_DSN = "postgresql+asyncpg://svc_authz:app_local_dev@localhost:5432/scaleforge"
-_ORGS_WRITE_DSN = "postgresql+asyncpg://svc_orgs:app_local_dev@localhost:5432/scaleforge"
+_AUTHZ_WRITE_DSN = (
+    f"postgresql+asyncpg://svc_authz:app_local_dev@localhost:5432/{os.environ['SF_DB_NAME']}"
+)
+_ORGS_WRITE_DSN = (
+    f"postgresql+asyncpg://svc_orgs:app_local_dev@localhost:5432/{os.environ['SF_DB_NAME']}"
+)
 
 
 class FakeTokenValidator:

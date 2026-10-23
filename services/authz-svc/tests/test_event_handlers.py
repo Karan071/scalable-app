@@ -537,3 +537,39 @@ async def test_user_disabled_emits_no_mfa_sync_without_an_mfa_role(
             )
         ).all()
     assert rows == []
+
+
+async def test_concurrent_grants_of_one_role_both_succeed_exactly_one_wins(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """user.created and user.reactivated for one user can be handled
+    concurrently (LLD-08 §6) and both grant ``customer``. Neither may raise:
+    an exception dead-letters the message."""
+    import asyncio
+
+    from app import repository
+
+    for _ in range(10):
+        user_id = uuid7()
+
+        async def grant(user_id: UUID = user_id) -> object:
+            async with session_factory() as session, session.begin():
+                return await repository.grant_role_unconditional(
+                    session,
+                    user_id=user_id,
+                    role_id="customer",
+                    domain="customer",
+                    org_id=None,
+                    membership_id=None,
+                    granted_by=user_id,
+                    reason="signup",
+                )
+
+        results = await asyncio.gather(grant(), grant())
+
+        assert sum(r is not None for r in results) == 1
+        async with session_factory() as session:
+            rows = await repository.list_role_assignments(
+                session, domain="customer", user_id=user_id
+            )
+        assert len(rows) == 1

@@ -3,8 +3,10 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
-from sqlalchemy import func, select, update
+from sf_db import violated_unique_constraint
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import (
@@ -19,6 +21,10 @@ from .models import (
 
 class VersionConflict(Exception):
     pass
+
+
+class AlreadyAssigned(Exception):
+    """The user already holds this role in this domain (active or suspended)."""
 
 
 # --- roles -----------------------------------------------------------------
@@ -66,7 +72,14 @@ async def insert_role_assignment(
         version=1,
     )
     session.add(assignment)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # A repeat grant: a double-submit, or two admins at once (the second
+        # insert waits for the first to commit, then hits the index).
+        if violated_unique_constraint(exc) == "uq_role_assignments_active":
+            raise AlreadyAssigned(user_id, role_id, domain) from exc
+        raise
     return assignment
 
 
@@ -299,30 +312,42 @@ async def grant_role_unconditional(
     customer grant — unconditional (no ``role_grant`` check; see LLD-02 §9
     and the design note in ``service.py``'s module docstring for why).
     Returns ``None`` (no-op) if an active/suspended row already exists for
-    this (user, role, domain) — defensive idempotency layered on top of the
-    inbox table's own dedup, in case a handler is ever invoked twice outside
-    of a single message delivery.
+    this (user, role, domain).
+
+    Atomic, via ``ON CONFLICT`` on the ``uq_role_assignments_active``
+    partial index: different events for one user are handled concurrently
+    (LLD-08 §6), and ``user.created``/``user.reactivated`` both grant
+    ``customer``. A SELECT-then-INSERT let both transactions see no row and
+    both insert; the loser's unique violation dead-lettered its message.
     """
-    existing = await session.execute(
-        select(RoleAssignment.id).where(
-            RoleAssignment.user_id == user_id,
-            RoleAssignment.role_id == role_id,
-            RoleAssignment.domain == domain,
-            RoleAssignment.status != "revoked",
+    stmt = (
+        pg_insert(RoleAssignment)
+        .values(
+            id=uuid7(),
+            user_id=user_id,
+            role_id=role_id,
+            domain=domain,
+            org_id=org_id,
+            membership_id=membership_id,
+            status="active",
+            granted_by=granted_by,
+            granted_at=datetime.now(UTC),
+            revoked_by=None,
+            revoked_at=None,
+            reason=reason,
+            version=1,
         )
+        .on_conflict_do_nothing(
+            index_elements=["user_id", "role_id", "domain"],
+            # Literal, matching the index's own predicate: Postgres infers the
+            # partial index at plan time, which a bind parameter defeats.
+            index_where=text("status <> 'revoked'"),
+        )
+        .returning(RoleAssignment)
     )
-    if existing.first() is not None:
+    assignment = (await session.execute(stmt)).scalars().one_or_none()
+    if assignment is None:
         return None
-    assignment = await insert_role_assignment(
-        session,
-        user_id=user_id,
-        role_id=role_id,
-        domain=domain,
-        org_id=org_id,
-        membership_id=membership_id,
-        granted_by=granted_by,
-        reason=reason,
-    )
     await insert_casbin_g_row(session, user_id=user_id, role_id=role_id, domain=domain)
     return assignment
 

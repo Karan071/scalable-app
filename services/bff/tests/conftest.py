@@ -2,6 +2,12 @@
 
 import os
 
+# Isolated test environment (`make test-env`): never the dev DB, vhost, or
+# Redis DBs. Redis pub/sub (authz:policy) is global across DB indexes, so
+# policy-change notices still reach dev watchers -- harmless, they reload.
+# No telemetry export: test processes would otherwise report into the dev
+# Collector under the dev service names (and could trip dev alerts).
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 os.environ.setdefault("SF_SERVICE_NAME", "bff")
 os.environ.setdefault("SF_OIDC_ISSUER", "https://kc.test/realms/scaleforge")
 os.environ.setdefault("SF_OIDC_CLIENT_ID", "sf-bff")
@@ -16,5 +22,7 @@ os.environ.setdefault(
     "SF_SESSION_ENC_KEYS", '{"k1": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}'
 )
 os.environ.setdefault("SF_SESSION_ENC_PRIMARY_KID", "k1")
+os.environ.setdefault("SF_REDIS_SESSION_URL", "redis://localhost:6379/1")
+os.environ.setdefault("SF_RABBITMQ_VHOST", "scaleforge-test")
 os.environ.setdefault("SF_RABBITMQ_USER", "scaleforge")
 os.environ.setdefault("SF_RABBITMQ_PASSWORD", "rabbitmq_local_dev")

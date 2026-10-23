@@ -239,3 +239,28 @@ def test_assign_org_role_ignores_mass_assignment_fields(client: TestClient) -> N
     assert body["status"] == "active"  # not "suspended" from the extra field
     assert body["granted_by"] == str(actor_id)  # the real actor, not the spoofed one
     assert body["version"] == 1  # not 99
+
+
+def test_assigning_a_role_the_user_already_holds_is_409_not_500(client: TestClient) -> None:
+    """A repeat grant (double-submit, or two admins at once) violates
+    uq_role_assignments_active. That's a client-visible conflict, not a
+    server error."""
+    org_id, actor_id, target_id, membership_id = uuid7(), uuid7(), uuid7(), uuid7()
+    _setup_org_admin(client, org_id=org_id, actor_id=actor_id)
+    override_all_as(client.app, actor_id, acr=2)
+    client.app.state.orgs_client = FakeOrgsClient(default_user_id=target_id)
+    body = {
+        "user_id": str(target_id),
+        "role_id": "catalog_manager",
+        "membership_id": str(membership_id),
+    }
+
+    first = client.post(f"/v1/orgs/{org_id}/role-assignments", json=body)
+    second = client.post(f"/v1/orgs/{org_id}/role-assignments", json=body)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409, second.text
+    assert second.headers["content-type"] == "application/problem+json"
+    # The rejected attempt left nothing behind: one assignment, one grant.
+    listed = client.get(f"/v1/orgs/{org_id}/role-assignments", params={"user_id": str(target_id)})
+    assert [a["role_id"] for a in listed.json()] == ["catalog_manager"]

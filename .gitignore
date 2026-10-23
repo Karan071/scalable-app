@@ -8,3 +8,5 @@ __pycache__/
 # Local Compose secrets (see .env.example)
 .env
 claude-chat-memories
+# Local-only artifacts (e.g. `make dev-db-reset` backups)
+.local/
