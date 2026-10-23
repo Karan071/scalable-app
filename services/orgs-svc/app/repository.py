@@ -182,6 +182,25 @@ async def list_memberships_for_user(session: AsyncSession, user_id: UUID) -> lis
     return list((await session.execute(stmt)).scalars().all())
 
 
+async def disable_all_active_memberships_for_user(
+    session: AsyncSession, *, user_id: UUID, reason: str
+) -> list[Membership]:
+    """``user.disabled`` (LLD-08 §2.1's ``q.orgs.users`` binding): every
+    active membership for the user, across every org, -> disabled."""
+    stmt = (
+        update(Membership)
+        .where(Membership.user_id == user_id, Membership.status == "active")
+        .values(
+            status="disabled",
+            status_reason=reason,
+            updated_at=datetime.now(UTC),
+            version=Membership.version + 1,
+        )
+        .returning(Membership)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
 async def update_membership_status(
     session: AsyncSession,
     membership_id: UUID,

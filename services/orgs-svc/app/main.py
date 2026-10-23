@@ -23,9 +23,10 @@ from sf_common import (
     install_problem_details,
     instrument_fastapi_app,
 )
-from sf_messaging import OutboxRelay
+from sf_messaging import InboxConsumer, OutboxRelay
 from sqlalchemy import text
 
+from . import event_handlers
 from .db import build_orgs_engine, build_orgs_session_factory
 from .routes import router
 from .settings import Settings
@@ -86,8 +87,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await relay.start()
     app.state.relay = relay
 
+    consumer = InboxConsumer(
+        consumer_name=event_handlers.CONSUMER_NAME,
+        session_factory=session_factory,
+        amqp_url=_amqp_url(settings),
+        queue_name="q.orgs.users",
+        handlers=event_handlers.DISPATCH,
+    )
+    await consumer.start()
+    app.state.consumer = consumer
+
     yield
 
+    await consumer.stop()
     await relay.stop()
     await watcher.stop()
     await redis.aclose()
@@ -110,9 +122,9 @@ async def _authz_ready() -> bool:
         return False
 
 
-async def _relay_ready() -> bool:
+async def _relay_and_consumer_ready() -> bool:
     try:
-        return app.state.relay.is_running
+        return app.state.relay.is_running and app.state.consumer.is_running
     except Exception:
         return False
 
@@ -120,7 +132,9 @@ async def _relay_ready() -> bool:
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
 install_problem_details(app)
-app.include_router(build_health_router(readiness_checks=[_db_ready, _authz_ready, _relay_ready]))
+app.include_router(
+    build_health_router(readiness_checks=[_db_ready, _authz_ready, _relay_and_consumer_ready])
+)
 app.include_router(router)
 assert_routes_covered(app)
 instrument_fastapi_app(app)

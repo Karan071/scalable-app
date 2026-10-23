@@ -167,7 +167,8 @@ services:
         API=http://rabbitmq:15672/api
 
         # Exchanges (ADR-0003): sf.events carries facts, sf.commands carries
-        # requests with one intended consumer (nothing publishes to it yet).
+        # requests with one intended consumer (authz-svc's
+        # identity.mfa_group_sync_requested.v1, E2.8).
         curl -sf $$AUTH -X PUT "$$API/exchanges/%2F/sf.events" \
           -H 'content-type: application/json' \
           -d '{"type":"topic","durable":true}'
@@ -214,6 +215,31 @@ services:
         curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.bff.identity" \
           -H 'content-type: application/json' \
           -d '{"routing_key":"user.disabled.v1"}'
+
+        # q.orgs.users (E2.8, LLD-08 §2.1): orgs-svc consumes user.disabled.v1
+        # to disable the user's memberships in every org they belong to.
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.orgs.users.dlq" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.orgs.users" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.orgs.users.dlq"}}'
+        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.events/q/q.orgs.users" \
+          -H 'content-type: application/json' \
+          -d '{"routing_key":"user.disabled.v1"}'
+
+        # q.users.commands (E2.8, LLD-08 §4.2): users-svc consumes
+        # identity.mfa_group_sync_requested.v1, sent by authz-svc on the
+        # sf.commands exchange -- not sf.events, unlike every queue above.
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands.dlq" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
+        curl -sf $$AUTH -X PUT "$$API/queues/%2F/q.users.commands" \
+          -H 'content-type: application/json' \
+          -d '{"durable":true,"arguments":{"x-queue-type":"quorum","x-delivery-limit":10,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"q.users.commands.dlq"}}'
+        curl -sf $$AUTH -X POST "$$API/bindings/%2F/e/sf.commands/q/q.users.commands" \
+          -H 'content-type: application/json' \
+          -d '{"routing_key":"identity.mfa_group_sync_requested.v1"}'
     restart: "no"
 
   mailpit:

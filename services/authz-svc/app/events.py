@@ -20,6 +20,7 @@ async def emit(
     aggregate_id: UUID,
     aggregate_version: int,
     data: dict[str, object],
+    exchange: str = "sf.events",
 ) -> None:
     envelope = build_envelope(
         event_type=event_type,
@@ -33,7 +34,7 @@ async def emit(
     await add_to_outbox(
         session,
         envelope,
-        exchange="sf.events",
+        exchange=exchange,
         routing_key=routing_key,
         aggregate_id=str(aggregate_id),
         notify_channel=_NOTIFY_CHANNEL,
@@ -77,10 +78,16 @@ async def emit_role_changed(
 
 
 async def emit_mfa_group_sync(session: AsyncSession, assignment: RoleAssignment) -> None:
+    """A command (LLD-08 §4.2), not an event -- goes to ``sf.commands``, not
+    ``sf.events`` like every other ``emit*`` in this module. Getting this
+    wrong means the message is unroutable (no ``sf.events`` binding matches
+    this routing key) and the outbox row never leaves ``published_at IS
+    NULL`` (confirmed: this was the bug before this comment existed)."""
     await emit(
         session,
         event_type="identity.mfa_group_sync_requested",
         routing_key="identity.mfa_group_sync_requested.v1",
+        exchange="sf.commands",
         aggregate_type="role_assignment",
         aggregate_id=assignment.id,
         aggregate_version=assignment.version,
