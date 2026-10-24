@@ -36,12 +36,9 @@ def upgrade() -> None:
     )
     op.execute("ALTER TABLE categories ALTER COLUMN path TYPE ltree USING path::ltree")
     op.execute(
-        "ALTER TABLE categories ADD CONSTRAINT ck_categories_max_depth "
-        "CHECK (nlevel(path) <= 4)"
+        "ALTER TABLE categories ADD CONSTRAINT ck_categories_max_depth CHECK (nlevel(path) <= 4)"
     )
-    op.create_index(
-        "ix_categories_path", "categories", ["path"], postgresql_using="gist"
-    )
+    op.create_index("ix_categories_path", "categories", ["path"], postgresql_using="gist")
     op.create_index("ix_categories_org_id", "categories", ["org_id"])
 
     op.create_table(
@@ -58,9 +55,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("org_id", "slug", name="uq_products_org_slug"),
-        sa.CheckConstraint(
-            "status IN ('draft','active','archived')", name="ck_products_status"
-        ),
+        sa.CheckConstraint("status IN ('draft','active','archived')", name="ck_products_status"),
     )
     op.create_index(
         "ix_products_org_status_updated",
@@ -107,8 +102,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("org_id", "code", name="uq_promotions_org_code"),
         sa.CheckConstraint("kind IN ('percent','fixed')", name="ck_promotions_kind"),
         sa.CheckConstraint(
-            "(kind = 'percent' AND value BETWEEN 1 AND 90) "
-            "OR (kind = 'fixed' AND value > 0)",
+            "(kind = 'percent' AND value BETWEEN 1 AND 90) OR (kind = 'fixed' AND value > 0)",
             name="ck_promotions_value",
         ),
         sa.CheckConstraint("status IN ('active','disabled')", name="ck_promotions_status"),

@@ -8,21 +8,43 @@ search index (search-svc, a separate service/schema).
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Text, TypeDecorator, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, UniqueConstraint, cast
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.types import UserDefinedType
 
 
-class LTree(TypeDecorator):
+class LTree(UserDefinedType):
     """``ltree`` (the Postgres extension init-schemas.sh enables), with no
     native SQLAlchemy type in this version. Values are plain dotted-label
-    strings (``"a.b.c"``) on the Python side; Postgres does the comparisons."""
+    strings (``"a.b.c"``) on the Python side; Postgres does the comparisons.
 
-    impl = Text
+    A ``TypeDecorator`` doesn't work here: its ``get_col_spec`` is never
+    consulted by the compiler, so a cast built from one renders the column's
+    *storage* type (``CAST(... AS VARCHAR)``, confirmed), not ``LTREE``.
+    ``UserDefinedType.get_col_spec`` is the hook the compiler actually calls
+    for a type used standalone, so ``bind_expression``'s explicit
+    ``CAST(... AS LTREE)`` -- needed because asyncpg sends the bound
+    parameter as its inferred Python type and Postgres refuses the implicit
+    varchar->ltree cast on INSERT/UPDATE (confirmed: ``DatatypeMismatchError``)
+    -- renders correctly.
+    """
+
     cache_ok = True
 
     def get_col_spec(self, **kw: object) -> str:
         return "LTREE"
+
+    def bind_processor(self, dialect: Dialect) -> None:
+        return None
+
+    def result_processor(self, dialect: Dialect, coltype: object) -> None:
+        return None
+
+    def bind_expression(self, bindvalue: ColumnElement) -> ColumnElement:
+        return cast(bindvalue, self)
 
 
 class Base(DeclarativeBase):
@@ -52,9 +74,7 @@ class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_products_org_slug"),
-        CheckConstraint(
-            "status IN ('draft','active','archived')", name="ck_products_status"
-        ),
+        CheckConstraint("status IN ('draft','active','archived')", name="ck_products_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
@@ -101,8 +121,7 @@ class Promotion(Base):
         UniqueConstraint("org_id", "code", name="uq_promotions_org_code"),
         CheckConstraint("kind IN ('percent','fixed')", name="ck_promotions_kind"),
         CheckConstraint(
-            "(kind = 'percent' AND value BETWEEN 1 AND 90) "
-            "OR (kind = 'fixed' AND value > 0)",
+            "(kind = 'percent' AND value BETWEEN 1 AND 90) OR (kind = 'fixed' AND value > 0)",
             name="ck_promotions_value",
         ),
         CheckConstraint("status IN ('active','disabled')", name="ck_promotions_status"),

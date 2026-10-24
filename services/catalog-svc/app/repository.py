@@ -49,7 +49,9 @@ async def insert_category(
     return category
 
 
-async def get_category(session: AsyncSession, category_id: UUID, *, org_id: UUID) -> Category | None:
+async def get_category(
+    session: AsyncSession, category_id: UUID, *, org_id: UUID
+) -> Category | None:
     stmt = select(Category).where(Category.id == category_id, Category.org_id == org_id)
     return (await session.execute(stmt)).scalars().one_or_none()
 
@@ -93,10 +95,12 @@ async def category_has_children_or_products(
 async def delete_category(session: AsyncSession, category_id: UUID, *, org_id: UUID) -> None:
     if await category_has_children_or_products(session, category_id, org_id=org_id):
         raise HasChildren(category_id)
-    result = await session.execute(
-        delete(Category).where(Category.id == category_id, Category.org_id == org_id)
+    stmt = (
+        delete(Category)
+        .where(Category.id == category_id, Category.org_id == org_id)
+        .returning(Category.id)
     )
-    if result.rowcount == 0:
+    if (await session.execute(stmt)).scalars().one_or_none() is None:
         raise NotFoundError(category_id)
 
 
@@ -188,7 +192,9 @@ async def update_product(
 
     stmt = (
         update(Product)
-        .where(Product.id == product_id, Product.org_id == org_id, Product.version == expected_version)
+        .where(
+            Product.id == product_id, Product.org_id == org_id, Product.version == expected_version
+        )
         .values(**values)
         .returning(Product)
     )
@@ -208,7 +214,9 @@ async def transition_product_status(
 ) -> Product:
     stmt = (
         update(Product)
-        .where(Product.id == product_id, Product.org_id == org_id, Product.version == expected_version)
+        .where(
+            Product.id == product_id, Product.org_id == org_id, Product.version == expected_version
+        )
         .values(status=new_status, updated_at=datetime.now(UTC), version=expected_version + 1)
         .returning(Product)
     )
@@ -306,7 +314,9 @@ async def update_sku(
     return row
 
 
-async def archive_sku(session: AsyncSession, sku_id: UUID, *, org_id: UUID, expected_version: int) -> Sku:
+async def archive_sku(
+    session: AsyncSession, sku_id: UUID, *, org_id: UUID, expected_version: int
+) -> Sku:
     stmt = (
         update(Sku)
         .where(Sku.id == sku_id, Sku.org_id == org_id, Sku.version == expected_version)
@@ -374,14 +384,14 @@ async def insert_promotion(
     return promo
 
 
-async def get_promotion(session: AsyncSession, promotion_id: UUID, *, org_id: UUID) -> Promotion | None:
+async def get_promotion(
+    session: AsyncSession, promotion_id: UUID, *, org_id: UUID
+) -> Promotion | None:
     stmt = select(Promotion).where(Promotion.id == promotion_id, Promotion.org_id == org_id)
     return (await session.execute(stmt)).scalars().one_or_none()
 
 
-async def get_promotion_by_code(
-    session: AsyncSession, org_id: UUID, code: str
-) -> Promotion | None:
+async def get_promotion_by_code(session: AsyncSession, org_id: UUID, code: str) -> Promotion | None:
     stmt = select(Promotion).where(Promotion.org_id == org_id, Promotion.code == code.upper())
     return (await session.execute(stmt)).scalars().one_or_none()
 
@@ -407,10 +417,12 @@ async def set_promotion_status(
 
 
 async def delete_promotion(session: AsyncSession, promotion_id: UUID, *, org_id: UUID) -> None:
-    result = await session.execute(
-        delete(Promotion).where(Promotion.id == promotion_id, Promotion.org_id == org_id)
+    stmt = (
+        delete(Promotion)
+        .where(Promotion.id == promotion_id, Promotion.org_id == org_id)
+        .returning(Promotion.id)
     )
-    if result.rowcount == 0:
+    if (await session.execute(stmt)).scalars().one_or_none() is None:
         raise NotFoundError(promotion_id)
 
 
@@ -472,7 +484,8 @@ async def upsert_store_settings(
     await session.execute(
         text(
             "INSERT INTO store_pricing_settings "
-            "(org_id, status, currency, shipping_flat_minor, tax_rate_bps, source_version, updated_at) "
+            "(org_id, status, currency, shipping_flat_minor, tax_rate_bps, source_version, "
+            " updated_at) "
             "VALUES (:org_id, :status, :currency, :shipping_flat_minor, :tax_rate_bps, "
             " :source_version, now()) "
             "ON CONFLICT (org_id) DO UPDATE SET "

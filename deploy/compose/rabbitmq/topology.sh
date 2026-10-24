@@ -79,4 +79,17 @@ queue_with_dlq q.users.commands
 bind sf.commands q.users.commands user.idp_sync_requested.v1
 bind sf.commands q.users.commands user.idp_status_sync_requested.v1
 
+# q.catalog.orgs (E3.1, LLD-05 §2): catalog-svc's store_pricing_settings
+# projection off organization.* events (currency, shipping, tax, status) --
+# how the pricing quote learns an org's settings without calling orgs-svc
+# synchronously.
+queue_with_dlq q.catalog.orgs
+bind sf.events q.catalog.orgs organization.*.v1
+
+# q.search.catalog (E3.2, LLD-05 §7.2): search-svc indexes catalog-svc's
+# product lifecycle (version-guarded upsert/tombstone).
+queue_with_dlq q.search.catalog
+bind sf.events q.search.catalog product.updated.v1
+bind sf.events q.search.catalog product.deleted.v1
+
 echo "topology: vhost '$VHOST' declared"

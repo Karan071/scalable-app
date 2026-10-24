@@ -133,7 +133,9 @@ def compute_quote(
     valid = True
     for req in lines:
         sku = skus_by_id.get(req.sku_id)
-        available = sku is not None and sku.sku_status == "active" and sku.product_status == "active"
+        available = (
+            sku is not None and sku.sku_status == "active" and sku.product_status == "active"
+        )
         if not available:
             valid = False
             quote_lines.append(

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 |
+| Status | Draft v0.1 (catalog-svc's core is built against it, 2026-10-24 — see §4's "As built") |
 | Milestone | M3 (cache and experiments: M4) |
 | Services | catalog-svc (schema `catalog`, object storage), search-svc (schema `search`) |
 | ADRs | 0002, 0007, 0015 |
@@ -148,6 +148,15 @@ This suits low-contention admin edits (PRD §5.1). Changing a SKU bumps the pare
 
 After commit, cache keys are deleted (LLD-09 §6).
 
+**As built (2026-10-24).** A few deviations from the text above:
+
+- **SKU delete archives, not deletes.** `DELETE .../skus/{skuId}` sets `status='archived'` rather than removing the row: a hard delete would orphan `price_history`'s foreign key. The response and status code are unchanged.
+- **The quote endpoint has only its internal form so far.** `POST /internal/v1/orgs/{orgId}/quotes` (`Internal("catalog:quotes")`) is built and unit/integration-tested. The public variant the BFF would call for cart display (§6) isn't — it needs the BFF-side composition this epic doesn't own.
+- **Categories and promotions have no `If-Match`.** Per the ER diagram (§2), neither carries a `version` column; their CRUD is simple create/read/update/delete, not optimistic-locked.
+- **The admin product list has no `q`.** Full-text search is search-svc's job (§7); the admin list (§4) filters only by `status` and `category`.
+- **Markdown rendering** uses `markdown-it-py` (CommonMark) before the `nh3` sanitize pass.
+- **`product.updated.v1`'s payload omits `category_path` and `primary_image_key`** (§10 lists both). category_id is the only category reference (names come from search-svc's own category-name lookup, not built yet, so §7.1's weight-B category-name text isn't indexed); image data waits on the images feature itself.
+
 ## 5. Images
 
 1. `POST /v1/orgs/{orgId}/products/{id}/images:upload` → `{image_id, upload: {url, fields}}`. This is an object-storage **presigned POST** with policy conditions:
@@ -261,6 +270,15 @@ Events can arrive out of order across queues and retries. The version guard make
   - metric `search_index_drift_products`;
   - auto-repair by reindexing that product.
 - **Recovery after search DB loss:** a full reindex plus catalog-event replay from the outbox (LLD-08 §5).
+
+**As built (search-svc, 2026-10-24).**
+
+- **No Casbin, no token validation.** Every route here is `Public` (LLD-05 §8 is unauthenticated browse): search-svc installs no enforcer, no `TokenValidator`, and reads no `authz` schema — it's the first service in this build with no `Authorize`/`Internal`/`AuthenticatedUser` route on its own live request path.
+- **`tsv` is a generated column** (`GENERATED ALWAYS AS (...) STORED`), not written from Python: Postgres recomputes it from `name`/`description_text` on every write, so it can never drift.
+- **No weight-B category names.** catalog-svc's `product.updated.v1` carries `category_id`, not category names (§4/§10's "As built"), so the tsvector is name (A) + description (C) only.
+- **`--org-id` only, not `--all`.** Reindexing every org needs a way to enumerate every org id, which belongs to orgs-svc, not this CLI (`make search-reindex ORG_ID=...`).
+- **Deferred:** `sku_availability`/the `inventory.availability_changed.v1` consumer (inventory-svc doesn't exist yet — `in_stock` is always `true`), facet counts, the `search_index_lag_seconds` histogram and `X-Search-Index-Lag-Hint` header (§7.3), the nightly drift check, and a sweeper for tombstone/inbox row retention (same open item every other service's inbox table already has).
+- **Query validation is `400`, not `422`** (overlong `q`, bad `sort`, `page > 50`, a tampered or malformed cursor) — this endpoint's documented contract, confirmed by its own tests, and distinct from the rest of this codebase's usual `422`.
 
 ## 10. Events published (catalog-svc)
 

@@ -63,7 +63,16 @@ def install_problem_details(
 
     @app.exception_handler(HTTPException)
     async def _http_exception(request: Request, exc: HTTPException) -> JSONResponse:
-        return _problem(exc.status_code, str(exc.detail) or "Error", None, request)
+        # Forwards exc.headers: routes raise HTTPException(..., headers={"etag": ...})
+        # for a 412/428 that must carry the current ETag (RFC 7232), e.g.
+        # catalog-svc's optimistic-locking routes (LLD-05 §4).
+        return _problem(
+            exc.status_code,
+            str(exc.detail) or "Error",
+            None,
+            request,
+            headers=dict(exc.headers or {}),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation_exception(request: Request, exc: RequestValidationError) -> JSONResponse:

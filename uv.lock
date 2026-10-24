@@ -2050,15 +2050,25 @@ name = "scaleforge-search-svc"
 version = "0.1.0"
 source = { editable = "services/search-svc" }
 dependencies = [
+    { name = "alembic" },
     { name = "fastapi" },
+    { name = "httpx" },
+    { name = "sf-authz" },
     { name = "sf-common" },
+    { name = "sf-db" },
+    { name = "sf-messaging" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.13" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "sf-authz", editable = "libs/py/sf-authz" },
     { name = "sf-common", editable = "libs/py/sf-common" },
+    { name = "sf-db", editable = "libs/py/sf-db" },
+    { name = "sf-messaging", editable = "libs/py/sf-messaging" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 

@@ -269,6 +269,16 @@
       "name": "orgs:read",
       "protocol": "openid-connect",
       "description": "orgs-svc GET /internal/v1/memberships/{id} (LLD-03 §8, LLD-02 §7)"
+    },
+    {
+      "name": "catalog:export",
+      "protocol": "openid-connect",
+      "description": "catalog-svc GET /internal/v1/orgs/{orgId}/products:export, search-svc's reindex job (LLD-05 §9)"
+    },
+    {
+      "name": "catalog:quotes",
+      "protocol": "openid-connect",
+      "description": "catalog-svc POST /internal/v1/orgs/{orgId}/quotes (LLD-05 §3). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
     }
   ],
   "clients": [
@@ -372,6 +382,32 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "sf-svc-search",
+      "name": "search-svc (service identity)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "$(SF_SVC_SEARCH_CLIENT_SECRET)",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "defaultClientScopes": [
+        "catalog:export"
+      ],
+      "protocolMappers": [
+        {
+          "name": "scaleforge-internal-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "scaleforge-internal",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "sf-svc-authz",

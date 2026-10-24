@@ -15,6 +15,10 @@ def _app() -> FastAPI:
     def crash() -> None:
         raise RuntimeError("unexpected")
 
+    @app.get("/stale")
+    def stale() -> None:
+        raise HTTPException(status_code=412, detail="version conflict", headers={"etag": '"v3"'})
+
     return app
 
 
@@ -29,6 +33,13 @@ def test_http_exception_is_rfc9457() -> None:
         "status": 409,
         "instance": "/boom",
     }
+
+
+def test_http_exception_headers_reach_the_response() -> None:
+    response = TestClient(_app(), raise_server_exceptions=False).get("/stale")
+
+    assert response.status_code == 412
+    assert response.headers["etag"] == '"v3"'
 
 
 def test_unhandled_exception_becomes_500_problem() -> None:

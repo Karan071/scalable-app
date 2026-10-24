@@ -30,8 +30,23 @@ _MD = MarkdownIt("commonmark")
 # sanitizes again on render (LLD-15 §6) -- this is defense in depth, not the
 # only check.
 _ALLOWED_TAGS = {
-    "p", "br", "b", "strong", "i", "em", "ul", "ol", "li", "a",
-    "code", "pre", "blockquote", "h1", "h2", "h3", "h4",
+    "p",
+    "br",
+    "b",
+    "strong",
+    "i",
+    "em",
+    "ul",
+    "ol",
+    "li",
+    "a",
+    "code",
+    "pre",
+    "blockquote",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
 }
 _ALLOWED_ATTRIBUTES = {"a": {"href"}}
 
@@ -134,6 +149,7 @@ def _product_snapshot_data(product: Product, skus: list[Sku]) -> dict[str, objec
         "product_id": str(product.id),
         "slug": product.slug,
         "name": product.name,
+        "description_md": product.description_md,
         "status": product.status,
         "category_id": str(product.category_id) if product.category_id else None,
         "version": product.version,
@@ -148,6 +164,28 @@ def _product_snapshot_data(product: Product, skus: list[Sku]) -> dict[str, objec
             for sku in skus
         ],
     }
+
+
+async def export_products(
+    session: AsyncSession,
+    org_id: UUID,
+    *,
+    cursor: tuple[datetime, UUID] | None,
+    limit: int,
+) -> tuple[list[dict[str, object]], tuple[datetime, UUID] | None]:
+    """LLD-05 §9 step 1: every product regardless of status, in the same
+    snapshot shape as ``product.updated.v1`` -- search-svc's reindex job
+    applies it through the exact same upsert/delete logic as the live
+    consumer (§9 step 2: "the same version guard")."""
+    products = await repository.list_products(
+        session, org_id, status=None, category_id=None, cursor=cursor, limit=limit
+    )
+    snapshots = []
+    for product in products:
+        skus = await repository.list_skus(session, product.id, org_id=org_id)
+        snapshots.append(_product_snapshot_data(product, skus))
+    next_cursor = (products[-1].updated_at, products[-1].id) if len(products) == limit else None
+    return snapshots, next_cursor
 
 
 async def _emit_product_snapshot(session: AsyncSession, product: Product) -> None:
@@ -181,7 +219,9 @@ async def create_category(
     )
 
 
-async def update_category(session: AsyncSession, category_id: UUID, *, org_id: UUID, name: str) -> Category:
+async def update_category(
+    session: AsyncSession, category_id: UUID, *, org_id: UUID, name: str
+) -> Category:
     try:
         return await repository.update_category(session, category_id, org_id=org_id, name=name)
     except repository.NotFoundError as exc:
@@ -211,7 +251,10 @@ async def create_product(
     category_id: UUID | None,
 ) -> Product:
     normalized = normalize_slug(slug)
-    if category_id is not None and await repository.get_category(session, category_id, org_id=org_id) is None:
+    if (
+        category_id is not None
+        and await repository.get_category(session, category_id, org_id=org_id) is None
+    ):
         raise NotFoundError(category_id)
     product = await repository.insert_product(
         session,
@@ -259,7 +302,9 @@ async def update_product(
             expected_version=expected_version,
             name=name,
             description_md=description_md,
-            description_html=render_description(description_md) if description_md is not None else None,
+            description_html=render_description(description_md)
+            if description_md is not None
+            else None,
             category_id=category_id,
             category_id_set=category_id_set,
         )
@@ -296,7 +341,11 @@ async def transition_product(
     new_status = "active" if action == "publish" else "archived"
     try:
         product = await repository.transition_product_status(
-            session, product_id, org_id=org_id, expected_version=expected_version, new_status=new_status
+            session,
+            product_id,
+            org_id=org_id,
+            expected_version=expected_version,
+            new_status=new_status,
         )
     except repository.VersionConflict as exc:
         raise VersionConflictError(product_id) from exc
@@ -468,7 +517,9 @@ async def set_promotion_status(
     session: AsyncSession, promotion_id: UUID, *, org_id: UUID, status: str
 ) -> Promotion:
     try:
-        return await repository.set_promotion_status(session, promotion_id, org_id=org_id, status=status)
+        return await repository.set_promotion_status(
+            session, promotion_id, org_id=org_id, status=status
+        )
     except repository.NotFoundError as exc:
         raise NotFoundError(promotion_id) from exc
 

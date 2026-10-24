@@ -1,4 +1,4 @@
-.PHONY: sync fmt lint typecheck test test-env test-alerts test-system test-revocation-latency migrate dev dev-down dev-logs dev-db-reset
+.PHONY: sync fmt lint typecheck test test-env test-alerts test-system test-revocation-latency search-reindex migrate dev dev-down dev-logs dev-db-reset
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml --env-file .env
 
@@ -71,6 +71,15 @@ test-revocation-latency: test-env ## M2 exit evidence: role-revocation latency v
 	uv run --all-packages python tests/system/revocation_latency.py \
 		--trials $(or $(TRIALS),200) --concurrency $(or $(CONCURRENCY),10) \
 		$(if $(SCENARIOS),--scenarios $(SCENARIOS)) $(if $(REPORT),--report $(REPORT))
+
+search-reindex: ## Full reindex of one org's products into search-svc (LLD-05 §9). Needs catalog-svc and search-svc already running (dev DB/vhost).
+	test -n "$(ORG_ID)" || (echo "usage: make search-reindex ORG_ID=<uuid>" && exit 1)
+	set -a; . ./.env; set +a; \
+	(cd services/search-svc && SF_DB_PASSWORD="$$POSTGRES_APP_PASSWORD" \
+		SF_CATALOG_SVC_BASE_URL=$(or $(SF_CATALOG_SVC_BASE_URL),http://localhost:8000) \
+		SF_OIDC_TOKEN_ENDPOINT=$(or $(SF_OIDC_TOKEN_ENDPOINT),http://localhost:8081/realms/scaleforge/protocol/openid-connect/token) \
+		SF_SVC_SEARCH_CLIENT_SECRET="$$SF_SVC_SEARCH_CLIENT_SECRET" \
+		uv run --quiet python -m app.cli reindex --org-id $(ORG_ID))
 
 test-alerts: ## Check Prometheus rules and run their promtool unit tests (LLD-10 §14).
 	docker run --rm --entrypoint promtool -v "$$(pwd)/deploy/compose/prometheus/rules:/rules:ro" \

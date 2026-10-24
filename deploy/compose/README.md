@@ -132,7 +132,11 @@ Go to the **Exchanges** tab and confirm `sf.events` and `sf.commands` (type
 `topic`, durable) exist. Go to the **Queues** tab and confirm `q.authz.identity`
 and `q.authz.identity.dlq` (type quorum) exist, with `q.authz.identity` bound
 to `sf.events` on `membership.*.v1`, `organization.*.v1`, `user.created.v1`,
-`user.disabled.v1`, and `user.reactivated.v1` (LLD-08 §2.1, E2.8).
+`user.disabled.v1`, and `user.reactivated.v1` (LLD-08 §2.1, E2.8). Also
+confirm `q.catalog.orgs`, bound to `organization.*.v1` (E3.1, LLD-05 §2):
+catalog-svc's `store_pricing_settings` projection. Also confirm
+`q.search.catalog`, bound to `product.updated.v1` and `product.deleted.v1`
+(E3.2, LLD-05 §7.2): search-svc's index.
 
 ## 7. Mailpit
 
@@ -175,7 +179,7 @@ After logging in, switch realm (top-left dropdown, currently showing
 `master`) to **`scaleforge`**, then check:
 
 - **Clients** → `sf-bff`, `sf-svc-bff`, `sf-svc-users`, `sf-svc-orgs`,
-  `sf-svc-authz`, `sf-users-admin`, `sf-authz-admin` all exist.
+  `sf-svc-authz`, `sf-svc-search`, `sf-users-admin`, `sf-authz-admin` all exist.
 - **Groups** → `mfa-required` exists, with realm role `mfa_required`.
 - **Realm settings → Tokens** → Access Token Lifespan shows 5 minutes.
 - **Authentication** → `sf-browser` is bound as the browser flow (MFA and
@@ -222,6 +226,14 @@ Keycloak (MFA, step-up, logout, admin disable) and deletes them afterwards.
 `test_tenant_isolation.py` runs the LLD-14 §4 tenant-isolation matrix. It
 generates the matrix from the `x-sf-authz` route metadata in each service's
 `/openapi.json`. Service logs go to `.local/system-tests/`.
+
+catalog-svc's and search-svc's own per-service suites (`make test`) cover
+most of their own correctness, including a mutation check on search-svc's
+out-of-order version guard. `make search-reindex ORG_ID=<uuid>` runs
+search-svc's full-reindex job (LLD-05 §9) against whatever catalog-svc and
+search-svc you already have running — it needs the `sf-svc-search`
+Keycloak client this epic added (`keycloak-config-cli` applies it
+automatically; see step 9).
 
 `make migrate` applies every service's migrations to the dev DB
 (`make migrate DB=<name>` for another).
