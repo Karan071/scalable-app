@@ -1,4 +1,4 @@
-.PHONY: sync fmt lint typecheck test test-env test-alerts test-system test-revocation-latency search-reindex migrate dev dev-down dev-logs dev-db-reset
+.PHONY: sync fmt lint typecheck test test-env test-alerts test-system test-revocation-latency search-reindex cart-abandon-expired migrate dev dev-down dev-logs dev-db-reset
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml --env-file .env
 
@@ -80,6 +80,10 @@ search-reindex: ## Full reindex of one org's products into search-svc (LLD-05 §
 		SF_OIDC_TOKEN_ENDPOINT=$(or $(SF_OIDC_TOKEN_ENDPOINT),http://localhost:8081/realms/scaleforge/protocol/openid-connect/token) \
 		SF_SVC_SEARCH_CLIENT_SECRET="$$SF_SVC_SEARCH_CLIENT_SECRET" \
 		uv run --quiet python -m app.cli reindex --org-id $(ORG_ID))
+
+cart-abandon-expired: ## Nightly job: mark carts abandoned past expires_at (LLD-06 §2, dev DB).
+	set -a; . ./.env; set +a; \
+	(cd services/cart-svc && SF_DB_PASSWORD="$$POSTGRES_APP_PASSWORD" uv run --quiet python -m app.cli abandon-expired)
 
 test-alerts: ## Check Prometheus rules and run their promtool unit tests (LLD-10 §14).
 	docker run --rm --entrypoint promtool -v "$$(pwd)/deploy/compose/prometheus/rules:/rules:ro" \

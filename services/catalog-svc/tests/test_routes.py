@@ -43,6 +43,7 @@ def client() -> Iterator[TestClient]:
         app.dependency_overrides[getattr(routes, name)] = lambda principal=principal: principal
     app.dependency_overrides[routes.require_quote_scope] = lambda: internal
     app.dependency_overrides[routes.require_export_scope] = lambda: internal
+    app.dependency_overrides[routes.require_sku_read_scope] = lambda: internal
 
     try:
         with TestClient(app) as c:
@@ -354,3 +355,38 @@ def test_export_is_scoped_to_its_org(client: TestClient) -> None:
     resp = client.get(f"/internal/v1/orgs/{org_a}/products:export")
 
     assert resp.json()["items"] == []
+
+
+def test_sku_lookup_finds_an_active_sku(client: TestClient) -> None:
+    org_id = _org_id()
+    product = client.post(f"/v1/orgs/{org_id}/products", json={"slug": "cup", "name": "Cup"}).json()
+    sku_id = str(uuid7())
+    client.put(
+        f"/v1/orgs/{org_id}/products/{product['id']}/skus/{sku_id}",
+        json={"sku_code": "CUP-1", "price_minor": 400},
+    )
+
+    resp = client.get(f"/internal/v1/orgs/{org_id}/skus/{sku_id}")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["product_id"] == product["id"]
+    assert body["price_minor"] == 400
+    assert body["sku_status"] == "active"
+    assert body["product_status"] == "draft"
+
+
+def test_sku_lookup_404s_for_a_sku_from_another_org(client: TestClient) -> None:
+    org_a, org_b = _org_id(), _org_id()
+    product = client.post(
+        f"/v1/orgs/{org_b}/products", json={"slug": "plate", "name": "Plate"}
+    ).json()
+    sku_id = str(uuid7())
+    client.put(
+        f"/v1/orgs/{org_b}/products/{product['id']}/skus/{sku_id}",
+        json={"sku_code": "PLATE-1", "price_minor": 400},
+    )
+
+    resp = client.get(f"/internal/v1/orgs/{org_a}/skus/{sku_id}")
+
+    assert resp.status_code == 404

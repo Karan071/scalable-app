@@ -179,7 +179,8 @@ After logging in, switch realm (top-left dropdown, currently showing
 `master`) to **`scaleforge`**, then check:
 
 - **Clients** → `sf-bff`, `sf-svc-bff`, `sf-svc-users`, `sf-svc-orgs`,
-  `sf-svc-authz`, `sf-svc-search`, `sf-users-admin`, `sf-authz-admin` all exist.
+  `sf-svc-authz`, `sf-svc-cart`, `sf-svc-search`, `sf-users-admin`,
+  `sf-authz-admin` all exist.
 - **Groups** → `mfa-required` exists, with realm role `mfa_required`.
 - **Realm settings → Tokens** → Access Token Lifespan shows 5 minutes.
 - **Authentication** → `sf-browser` is bound as the browser flow (MFA and
@@ -227,13 +228,15 @@ Keycloak (MFA, step-up, logout, admin disable) and deletes them afterwards.
 generates the matrix from the `x-sf-authz` route metadata in each service's
 `/openapi.json`. Service logs go to `.local/system-tests/`.
 
-catalog-svc's and search-svc's own per-service suites (`make test`) cover
-most of their own correctness, including a mutation check on search-svc's
-out-of-order version guard. `make search-reindex ORG_ID=<uuid>` runs
-search-svc's full-reindex job (LLD-05 §9) against whatever catalog-svc and
-search-svc you already have running — it needs the `sf-svc-search`
-Keycloak client this epic added (`keycloak-config-cli` applies it
-automatically; see step 9).
+catalog-svc's, search-svc's, and cart-svc's own per-service suites (`make
+test`) cover most of their own correctness, including mutation checks on
+search-svc's out-of-order version guard and cart-svc's 50-line cap.
+`make search-reindex ORG_ID=<uuid>` runs search-svc's full-reindex job
+(LLD-05 §9) against whatever catalog-svc and search-svc you already have
+running — it needs the `sf-svc-search` Keycloak client this epic added
+(`keycloak-config-cli` applies it automatically; see step 9).
+`make cart-abandon-expired` runs cart-svc's nightly abandon job (LLD-06 §2)
+against the dev DB.
 
 `make migrate` applies every service's migrations to the dev DB
 (`make migrate DB=<name>` for another).

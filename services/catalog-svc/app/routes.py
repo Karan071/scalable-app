@@ -43,6 +43,7 @@ require_delete_promotion = Authorize("promotion", "delete", domain=_org_domain)
 
 require_quote_scope = Internal("catalog:quotes")
 require_export_scope = Internal("catalog:export")
+require_sku_read_scope = Internal("catalog:read_sku")
 
 _DEFAULT_LIMIT = 24
 _MAX_LIMIT = 48
@@ -675,6 +676,43 @@ async def quote_route(
         currency=result.currency,
         computed_at=result.computed_at,
         pricing_fingerprint=result.pricing_fingerprint,
+    )
+
+
+# --- SKU lookup (cart-svc's add-to-cart validation, LLD-06 §2) -------------------
+
+
+class SkuLookupResponse(BaseModel):
+    sku_id: UUID
+    product_id: UUID
+    product_name: str
+    sku_status: str
+    product_status: str
+    price_minor: int
+
+
+@router.get("/internal/v1/orgs/{org_id}/skus/{sku_id}", response_model=SkuLookupResponse)
+async def get_sku_internal(
+    org_id: UUID,
+    sku_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_sku_read_scope),
+) -> SkuLookupResponse:
+    """ "Validates that the SKU belongs to orgId" (LLD-06 §2's PUT cart-item
+    rule). Reuses ``quote_inputs``'s one-row-or-none query -- the same
+    org-scoped join the quote endpoint already relies on, so a SKU from
+    another org 404s exactly like an unknown one would."""
+    skus = await repository.quote_inputs(session, org_id, [sku_id])
+    sku = skus.get(sku_id)
+    if sku is None:
+        raise HTTPException(status_code=404)
+    return SkuLookupResponse(
+        sku_id=sku.sku_id,
+        product_id=sku.product_id,
+        product_name=sku.product_name,
+        sku_status=sku.sku_status,
+        product_status=sku.product_status,
+        price_minor=sku.price_minor,
     )
 
 

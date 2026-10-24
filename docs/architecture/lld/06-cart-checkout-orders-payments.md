@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 |
+| Status | Draft v0.1 (§2, cart-svc, is built — see its "As built" note) |
 | Milestone | M3 (happy path, idempotency, persisted saga) → M4 (async compensation, reconciliation, SSE) |
 | Services | cart-svc, orders-svc, payments-svc, mock-payment-provider |
 | ADRs | 0003, 0008, 0011, 0015 |
@@ -41,6 +41,14 @@ Inventory internals are in LLD-07.
 - **Cart page:** the BFF composes the cart, a catalog quote (display totals, labeled as estimates), and availability.
 - **After purchase:** on `order.confirmed.v1`, cart-svc **subtracts the purchased quantities** from the active cart (lines that reach 0 are removed). An empty cart becomes `checked_out`. This keeps items added during checkout.
 - **Abandoned carts:** a nightly job marks carts abandoned past `expires_at`.
+
+**As built (cart-svc, 2026-10-24).**
+
+- **No outbox, no inbox consumer.** cart-svc publishes nothing in this slice (no other service needs a cart event yet), and the `order.confirmed.v1` subtract-on-purchase rule above isn't built: orders-svc, its publisher, doesn't exist yet. There's no `outbox` table at all, unlike every other service in this build.
+- **Row lock, not optimistic locking, for item mutations.** Add/remove/clear take a `SELECT ... FOR UPDATE` on the cart row rather than requiring the client to send `version`/`If-Match` on every click; `version` still bumps on every mutation, so checkout's `cart_version` snapshot check (§3) stays meaningful.
+- **The 50-line cap is an application check inside that locked transaction**, not a DB constraint (Postgres has no portable way to `CHECK` a related row count).
+- **The SKU-validity cache isn't built** (LLD-09's cache is M4 scope): every `PUT` item call is a real synchronous call to catalog-svc's new `GET /internal/v1/orgs/{orgId}/skus/{skuId}` (`Internal("catalog:read_sku")`).
+- **Casbin domain is the fixed string `"customer"`**, the same for every customer — it only confirms the caller holds `role:customer` (granted to everyone on signup, LLD-02 §9), not that this is *their* cart. Ownership is `customer_id` filtering in the repository.
 
 ## 3. Checkout API
 
