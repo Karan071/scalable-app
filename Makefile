@@ -1,4 +1,4 @@
-.PHONY: sync fmt lint typecheck test test-env test-alerts test-system test-revocation-latency search-reindex cart-abandon-expired migrate dev dev-down dev-logs dev-db-reset
+.PHONY: sync fmt lint typecheck test test-env test-alerts test-system test-revocation-latency search-reindex cart-abandon-expired inventory-reconcile migrate dev dev-down dev-logs dev-db-reset
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml --env-file .env
 
@@ -84,6 +84,10 @@ search-reindex: ## Full reindex of one org's products into search-svc (LLD-05 §
 cart-abandon-expired: ## Nightly job: mark carts abandoned past expires_at (LLD-06 §2, dev DB).
 	set -a; . ./.env; set +a; \
 	(cd services/cart-svc && SF_DB_PASSWORD="$$POSTGRES_APP_PASSWORD" uv run --quiet python -m app.cli abandon-expired)
+
+inventory-reconcile: ## Nightly job: ledger vs stock_items reconciliation, INV-6 (LLD-07 §9, dev DB).
+	set -a; . ./.env; set +a; \
+	(cd services/inventory-svc && SF_DB_PASSWORD="$$POSTGRES_APP_PASSWORD" uv run --quiet python -m app.cli reconcile)
 
 test-alerts: ## Check Prometheus rules and run their promtool unit tests (LLD-10 §14).
 	docker run --rm --entrypoint promtool -v "$$(pwd)/deploy/compose/prometheus/rules:/rules:ro" \

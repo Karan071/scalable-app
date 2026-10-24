@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 |
+| Status | Draft v0.1 (built against, 2026-10-24 — see §4's "As built") |
 | Milestone | M3 |
 | Service | inventory-svc (schema `inventory`) |
 | ADRs | 0006, 0011 |
@@ -137,6 +137,44 @@ For cancelled or refunded orders after commit: `on_hand += qty`, with ledger `re
 - **Optimistic lock** on `version`: 412 on mismatch. Admin adjustments are low contention.
 - The result must keep `on_hand ≥ reserved`. Otherwise 409 `below-reserved` (`CHECK` backstop).
 - Ledger `adjust`, keyed by `adjustment_id`. Emits audit `stock.adjusted` and, if the threshold is crossed, `inventory.availability_changed`.
+
+**As built (inventory-svc, 2026-10-24).** Every operation above is built
+as specified, with these notes:
+
+- **§4.1's 409 body is a `title` string, not `{lines: [...]}`.** This
+  codebase's shared problem-details envelope (`sf_common.
+  install_problem_details`) carries a short machine-readable `title` and
+  nothing else structured — confirmed by checking every other service's
+  `routes.py`, none of which return a custom body shape for an error. A
+  rejected reserve returns `title: "insufficient-stock"`, same precedent
+  as cart-svc's `sku-unavailable`. The shortfall detail (`{sku_id,
+  requested, available}` per line) is still computed and JSON-encoded into
+  `reservations.reason`, so the idempotent-replay guarantee ("same 409
+  even after stock arrives") holds internally — it's just not echoed back
+  over HTTP.
+- **Restock has no HTTP endpoint**, matching §8's table (it's listed only
+  under "Commands consumed", not the endpoint list). It's reachable only
+  via `inventory.restock_requested.v1` on `q.inventory.commands`.
+- **Commit and release are reachable both ways** — the direct internal
+  HTTP calls in §4.2/§4.3, and the same two commands on
+  `q.inventory.commands` — dispatching into the identical `service.commit`/
+  `release` functions either way. Nothing publishes those commands yet
+  (orders-svc doesn't exist), so only the HTTP path is exercised today.
+- **`low_stock_threshold` has no admin endpoint to set it.** Every new
+  stock item starts at `0` (§3's zero-stock row) and stays there — "low
+  stock" currently means "out of stock". A per-SKU threshold-setting
+  endpoint is this epic's own open item, not a design gap in this LLD.
+- **Per-store TTL override isn't wired up.** §6 allows 300-3600s per
+  store; every reservation uses the one fixed `SF_RESERVATION_TTL_SECONDS`
+  default (900s) because there's no settings projection from orgs-svc yet
+  (the same kind of gap catalog-svc's pricing settings projection exists
+  specifically to avoid — inventory-svc doesn't have the equivalent).
+
+Verified live: the oversell test (stock 50, 200 concurrent reserves,
+exactly 50 succeed) and a multi-SKU opposite-lock-order test both pass
+against a real Postgres; an expiry-vs-commit race (forced into the
+sweeper's window, raced with `asyncio.gather`) lands in exactly one
+terminal state either way.
 
 ## 5. Concurrency control and deadlocks
 

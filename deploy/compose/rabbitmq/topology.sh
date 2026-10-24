@@ -92,4 +92,17 @@ queue_with_dlq q.search.catalog
 bind sf.events q.search.catalog product.updated.v1
 bind sf.events q.search.catalog product.deleted.v1
 
+# q.inventory.catalog (E3.4, LLD-07 §3): inventory-svc creates a zero-stock
+# row for every new SKU off catalog-svc's product lifecycle.
+queue_with_dlq q.inventory.catalog
+bind sf.events q.inventory.catalog product.updated.v1
+
+# q.inventory.commands (E3.4, LLD-07 §4.2-§4.4): the async alternative to
+# the direct internal commit/release/restock calls, for whenever orders-svc
+# exists and prefers a command over a synchronous call.
+queue_with_dlq q.inventory.commands
+bind sf.commands q.inventory.commands inventory.commit_requested.v1
+bind sf.commands q.inventory.commands inventory.release_requested.v1
+bind sf.commands q.inventory.commands inventory.restock_requested.v1
+
 echo "topology: vhost '$VHOST' declared"

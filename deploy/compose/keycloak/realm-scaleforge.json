@@ -289,6 +289,16 @@
       "name": "cart:read",
       "protocol": "openid-connect",
       "description": "cart-svc GET /internal/v1/carts/{cartId}:snapshot (LLD-06 §2). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
+    },
+    {
+      "name": "inventory:reservations:write",
+      "protocol": "openid-connect",
+      "description": "inventory-svc POST /internal/v1/reservations, :commit, :release (LLD-07 §8). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
+    },
+    {
+      "name": "inventory:reservations:read",
+      "protocol": "openid-connect",
+      "description": "inventory-svc GET /internal/v1/reservations (LLD-07 §8, R3 reconciliation). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
     }
   ],
   "clients": [
