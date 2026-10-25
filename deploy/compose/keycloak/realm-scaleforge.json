@@ -278,7 +278,7 @@
     {
       "name": "catalog:quotes",
       "protocol": "openid-connect",
-      "description": "catalog-svc POST /internal/v1/orgs/{orgId}/quotes (LLD-05 §3). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
+      "description": "catalog-svc POST /internal/v1/orgs/{orgId}/quotes (LLD-05 §3). Assigned to sf-svc-orders."
     },
     {
       "name": "catalog:read_sku",
@@ -288,17 +288,17 @@
     {
       "name": "cart:read",
       "protocol": "openid-connect",
-      "description": "cart-svc GET /internal/v1/carts/{cartId}:snapshot (LLD-06 §2). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
+      "description": "cart-svc GET /internal/v1/carts/{cartId}:snapshot and the (customer_id, org_id) lookup (LLD-06 §2-§3). Assigned to sf-svc-orders."
     },
     {
       "name": "inventory:reservations:write",
       "protocol": "openid-connect",
-      "description": "inventory-svc POST /internal/v1/reservations, :commit, :release (LLD-07 §8). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
+      "description": "inventory-svc POST /internal/v1/reservations, :commit, :release (LLD-07 §8). Assigned to sf-svc-orders."
     },
     {
       "name": "inventory:reservations:read",
       "protocol": "openid-connect",
-      "description": "inventory-svc GET /internal/v1/reservations (LLD-07 §8, R3 reconciliation). Not yet assigned to a client: orders-svc, its only caller, doesn't exist yet."
+      "description": "inventory-svc GET /internal/v1/reservations (LLD-07 §8, R3 reconciliation). Assigned to sf-svc-orders."
     }
   ],
   "clients": [
@@ -415,6 +415,35 @@
       "serviceAccountsEnabled": true,
       "defaultClientScopes": [
         "catalog:read_sku"
+      ],
+      "protocolMappers": [
+        {
+          "name": "scaleforge-internal-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "scaleforge-internal",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "sf-svc-orders",
+      "name": "orders-svc (service identity)",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "$(SF_SVC_ORDERS_CLIENT_SECRET)",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "defaultClientScopes": [
+        "cart:read",
+        "catalog:quotes",
+        "inventory:reservations:write",
+        "inventory:reservations:read"
       ],
       "protocolMappers": [
         {

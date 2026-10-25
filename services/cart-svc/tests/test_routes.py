@@ -213,3 +213,26 @@ def test_internal_snapshot_404s_for_an_unknown_cart(client: TestClient) -> None:
     resp = client.get(f"/internal/v1/carts/{uuid7()}:snapshot")
 
     assert resp.status_code == 404
+
+
+def test_active_cart_snapshot_resolves_by_customer_and_org(
+    client: TestClient, catalog: _FakeCatalogClient
+) -> None:
+    org_id, sku_id = _org(), uuid7()
+    catalog.add(org_id, sku_id)
+    cart = client.put(f"/v1/me/carts/{org_id}/items/{sku_id}", json={"qty": 2}).json()
+    customer_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    resp = client.get(f"/internal/v1/customers/{customer_id}/carts/{org_id}:snapshot")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == cart["id"]
+    assert body["version"] == cart["version"]
+    assert [i["sku_id"] for i in body["items"]] == [str(sku_id)]
+
+
+def test_active_cart_snapshot_404s_with_no_active_cart(client: TestClient) -> None:
+    resp = client.get(f"/internal/v1/customers/{uuid7()}/carts/{_org()}:snapshot")
+
+    assert resp.status_code == 404

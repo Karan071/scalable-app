@@ -98,11 +98,37 @@ queue_with_dlq q.inventory.catalog
 bind sf.events q.inventory.catalog product.updated.v1
 
 # q.inventory.commands (E3.4, LLD-07 §4.2-§4.4): the async alternative to
-# the direct internal commit/release/restock calls, for whenever orders-svc
-# exists and prefers a command over a synchronous call.
+# the direct internal commit/release/restock calls. orders-svc (E3.5) uses
+# the direct calls today; this queue is what it would use instead once it
+# prefers a command over a synchronous one.
 queue_with_dlq q.inventory.commands
 bind sf.commands q.inventory.commands inventory.commit_requested.v1
 bind sf.commands q.inventory.commands inventory.release_requested.v1
 bind sf.commands q.inventory.commands inventory.restock_requested.v1
+
+# q.orders.inventory (E3.5, LLD-06 §5.1 steps 14-15): the checkout saga's
+# async continuation past COMMITTING -- real today, inventory-svc exists
+# and publishes both of these.
+queue_with_dlq q.orders.inventory
+bind sf.events q.orders.inventory inventory.committed.v1
+bind sf.events q.orders.inventory inventory.reservation_expired.v1
+
+# q.orders.payments (E3.5, LLD-06 §7): the saga's payment-resolution
+# events. Declared ahead of payments-svc (E3.6, doesn't exist yet) the
+# same way q.inventory.commands was declared ahead of orders-svc.
+queue_with_dlq q.orders.payments
+bind sf.events q.orders.payments payment.authorized.v1
+bind sf.events q.orders.payments payment.failed.v1
+bind sf.events q.orders.payments payment.succeeded.v1
+
+# q.payments.commands (E3.5, LLD-06 §5.1/§6): orders-svc already emits
+# payment.capture_requested.v1 and payment.refund_requested.v1 as commands
+# (the COMMITTING->CAPTURING step, and order cancel/refund). Declared now,
+# ahead of payments-svc (E3.6, doesn't exist yet), so those commands have
+# somewhere to land instead of NO_ROUTE-failing the relay forever -- the
+# same reasoning as q.inventory.commands being declared ahead of orders-svc.
+queue_with_dlq q.payments.commands
+bind sf.commands q.payments.commands payment.capture_requested.v1
+bind sf.commands q.payments.commands payment.refund_requested.v1
 
 echo "topology: vhost '$VHOST' declared"

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 (§2, cart-svc, is built — see its "As built" note) |
+| Status | Draft v0.1 (§2 cart-svc and §3-§6 orders-svc are built — see their own "As built" notes) |
 | Milestone | M3 (happy path, idempotency, persisted saga) → M4 (async compensation, reconciliation, SSE) |
 | Services | cart-svc, orders-svc, payments-svc, mock-payment-provider |
 | ADRs | 0003, 0008, 0011, 0015 |
@@ -42,9 +42,10 @@ Inventory internals are in LLD-07.
 - **After purchase:** on `order.confirmed.v1`, cart-svc **subtracts the purchased quantities** from the active cart (lines that reach 0 are removed). An empty cart becomes `checked_out`. This keeps items added during checkout.
 - **Abandoned carts:** a nightly job marks carts abandoned past `expires_at`.
 
-**As built (cart-svc, 2026-10-24).**
+**As built (cart-svc, 2026-10-24; one addition 2026-10-25 for orders-svc).**
 
-- **No outbox, no inbox consumer.** cart-svc publishes nothing in this slice (no other service needs a cart event yet), and the `order.confirmed.v1` subtract-on-purchase rule above isn't built: orders-svc, its publisher, doesn't exist yet. There's no `outbox` table at all, unlike every other service in this build.
+- **`GET /internal/v1/customers/{customerId}/carts/{orgId}:snapshot`** (added building orders-svc, E3.5): resolves the active cart by `(customer_id, org_id)`, reusing the `cart:read` scope. Checkout's request body carries neither `cart_id` nor the cart itself, so §3's flow needs this lookup before it can call the by-ID snapshot below.
+- **No outbox, no inbox consumer.** cart-svc still publishes nothing (no other service needs a cart event yet), and the `order.confirmed.v1` subtract-on-purchase rule above still isn't built — orders-svc (E3.5) now exists and really does publish `order.confirmed.v1`, so this is no longer blocked on a missing publisher, just not pulled into this epic's scope. There's no `outbox` table at all, unlike every other service in this build.
 - **Row lock, not optimistic locking, for item mutations.** Add/remove/clear take a `SELECT ... FOR UPDATE` on the cart row rather than requiring the client to send `version`/`If-Match` on every click; `version` still bumps on every mutation, so checkout's `cart_version` snapshot check (§3) stays meaningful.
 - **The 50-line cap is an application check inside that locked transaction**, not a DB constraint (Postgres has no portable way to `CHECK` a related row count).
 - **The SKU-validity cache isn't built** (LLD-09's cache is M4 scope): every `PUT` item call is a real synchronous call to catalog-svc's new `GET /internal/v1/orgs/{orgId}/skus/{skuId}` (`Internal("catalog:read_sku")`).
@@ -228,6 +229,19 @@ stateDiagram-v2
 | orders-svc crash mid-checkout | Idempotency lease expires → retried request resumes from the saga. The recovery worker continues async steps. | Consistent |
 | Broker down | Outbox rows accumulate. The sync path still works up to `AUTHORIZED`; async steps resume after recovery (FS-4). | Delayed, consistent |
 | Late `payment.succeeded` after cancel | Guard rejects the transition. Reconciliation R4 issues a refund. | cancelled + refunded |
+
+**As built (orders-svc, 2026-10-25).** §3-§6 (checkout, idempotency, the saga, and the order admin ops) are built; §7-§8 (payments-svc, the mock provider) are not — that's E3.6, next. Notes:
+
+- **§5.1's "par" snapshot+quote is sequential.** The quote needs the snapshot's own line items (sku_id/qty) to price; there's no way to start both at once. The sequence diagram's parallel pair is corrected to sequential here.
+- **§4's 409/402 response bodies carry only `title`, not `{lines: [...]}` or `{order_id}`.** ADR-0015 defines the problem-details shape as `type`/`title`/`status`/`detail`/`instance`/`correlation_id` plus `errors[]` for validation only — no precedent anywhere in this codebase for an arbitrary extension member. Same simplification as inventory-svc's `insufficient-stock` (LLD-07's own "As built" note).
+- **`REreserving` is spelled `RE_RESERVING`** in the actual `checkout_sagas.state` enum — cosmetic, for consistency with every other SCREAMING_SNAKE_CASE state name.
+- **`RE_RESERVING`/`RESTOCKING`/`VOIDING` are schema-complete but not behaviorally built.** A reservation expiring mid-`COMMITTING` cancels the order outright (reason `reservation_expired`) instead of re-reserving. A failed capture is treated as permanently failed on the *first* failure — straight to `RESTOCKING` → cancelled — instead of retrying up to 5× with backoff first. Both are collapses of a real state-diagram path into its terminal outcome, not missing states.
+- **The recovery worker (§5.3) cannot retry `RESERVING`/`AUTHORIZING`/`AUTH_PENDING` itself.** Those need `payment_method_token`, which orders-svc never persists (a deliberate choice, not an oversight — storing a raw payment token would be its own compliance problem). Only a client retry of the same checkout request (carrying the same body, proven identical by its request hash) can resume them; that path is `_resume_checkout`, driven by the idempotency key's lease takeover, not the background worker. The worker's own role for these three states is strictly deadline compensation — within budget, it just re-leases and waits. This is a correction to §5.3's text, which doesn't distinguish "retry the step" from "the step needs data only the original request has."
+- **The command-ID scheme in §5.3 ("`{order_id}:{command}:{attempt_group}`") isn't built.** Idempotency for `inventory.commit_requested`/`payment.capture_requested`/etc. rests entirely on the *receiving* service's own guard (inventory-svc's reservation state, the saga's own guarded transitions) — a redelivered or duplicate command is already a no-op there, so the extra message-ID scheme wasn't needed to make anything safe. If a participant ever needs to deduplicate the command itself (not just its effect), this is the gap to close.
+- **`next_action_at` is set automatically, not per call site.** `repository.guarded_transition` stamps it to "now" for any non-terminal landing state (immediately eligible — a no-op recovery claim unless actually stuck, see above) and `NULL` for `COMPLETED`/`CANCELLED`, overridable when a caller needs a specific backoff (e.g. `AUTH_PENDING`'s 5s retry window). This wasn't in the original design; it's what makes "every in-flight saga is recoverable" actually true rather than true only for states someone remembered to set a timer on.
+- **Found while building this, fixed in cart-svc (§2):** the checkout request carries no `cart_id`, only `(customer_id, org_id)` — but cart-svc's internal snapshot endpoint was keyed by `cart_id` alone. Added `GET /internal/v1/customers/{customerId}/carts/{orgId}:snapshot` to cart-svc, reusing the existing `cart:read` scope. A gap neither §2 nor §3 could have caught in isolation; this is the kind of thing the delivery plan's rolling-wave feedback loop (§1's "findings, measurements" arrow back to earlier LLDs) is for.
+
+Deferred (this epic's own open items): R1's dedicated stuck-saga alerting (beyond the recovery worker's own pass), R2, R4, R5, R6 (all need payments-svc); R3 is buildable without it but out of scope for now, since deadline compensation already covers the common case it exists for; the idempotency table's 24h cleanup job; §10's long-poll (`GET /v1/orders/{id}/status?wait=`) accepts `wait` but answers immediately — it needs E4.7's redis-cache fan-out to actually wait.
 
 ## 6. Orders: state machine and tracking (FR-CHK-06, FR-CHK-07)
 

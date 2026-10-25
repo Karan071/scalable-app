@@ -162,3 +162,34 @@ async def cart_snapshot(
         version=cart.version,
         items=[_item_out(i) for i in items],
     )
+
+
+@router.get(
+    "/internal/v1/customers/{customer_id}/carts/{org_id}:snapshot",
+    response_model=CartSnapshotResponse,
+)
+async def active_cart_snapshot(
+    customer_id: UUID,
+    org_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _: Principal = Depends(require_internal_cart_read),
+) -> CartSnapshotResponse:
+    """Resolves the *active* cart by (customer_id, org_id), not by cart_id.
+
+    LLD-06 §3's checkout request carries neither -- orders-svc only knows
+    the customer and the store -- so checkout needs this lookup before it
+    can call ``cart_snapshot`` above. Found while building orders-svc
+    (E3.5): not an oversight in LLD-06 §2's original cart-svc build, just a
+    gap neither side could see until the caller existed.
+    """
+    cart = await repository.get_active_cart(session, customer_id=customer_id, org_id=org_id)
+    if cart is None:
+        raise HTTPException(status_code=404, detail="no active cart")
+    items = await repository.list_items(session, cart.id)
+    return CartSnapshotResponse(
+        id=cart.id,
+        customer_id=cart.customer_id,
+        org_id=cart.org_id,
+        version=cart.version,
+        items=[_item_out(i) for i in items],
+    )
