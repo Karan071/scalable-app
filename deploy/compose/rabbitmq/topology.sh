@@ -113,22 +113,21 @@ queue_with_dlq q.orders.inventory
 bind sf.events q.orders.inventory inventory.committed.v1
 bind sf.events q.orders.inventory inventory.reservation_expired.v1
 
-# q.orders.payments (E3.5, LLD-06 §7): the saga's payment-resolution
-# events. Declared ahead of payments-svc (E3.6, doesn't exist yet) the
-# same way q.inventory.commands was declared ahead of orders-svc.
+# q.orders.payments (E3.5/E3.6, LLD-06 §7): the saga's payment-resolution
+# events, plus payment_status-only updates (voided/refunded) for the
+# compensation paths that don't drive the saga itself.
 queue_with_dlq q.orders.payments
 bind sf.events q.orders.payments payment.authorized.v1
 bind sf.events q.orders.payments payment.failed.v1
 bind sf.events q.orders.payments payment.succeeded.v1
+bind sf.events q.orders.payments payment.voided.v1
+bind sf.events q.orders.payments payment.refunded.v1
 
-# q.payments.commands (E3.5, LLD-06 §5.1/§6): orders-svc already emits
-# payment.capture_requested.v1 and payment.refund_requested.v1 as commands
-# (the COMMITTING->CAPTURING step, and order cancel/refund). Declared now,
-# ahead of payments-svc (E3.6, doesn't exist yet), so those commands have
-# somewhere to land instead of NO_ROUTE-failing the relay forever -- the
-# same reasoning as q.inventory.commands being declared ahead of orders-svc.
+# q.payments.commands (E3.5/E3.6, LLD-06 §5.1/§6): the three commands
+# orders-svc's checkout saga and order admin ops emit.
 queue_with_dlq q.payments.commands
 bind sf.commands q.payments.commands payment.capture_requested.v1
 bind sf.commands q.payments.commands payment.refund_requested.v1
+bind sf.commands q.payments.commands payment.void_requested.v1
 
 echo "topology: vhost '$VHOST' declared"

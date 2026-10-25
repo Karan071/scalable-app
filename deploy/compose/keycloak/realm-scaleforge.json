@@ -299,6 +299,11 @@
       "name": "inventory:reservations:read",
       "protocol": "openid-connect",
       "description": "inventory-svc GET /internal/v1/reservations (LLD-07 §8, R3 reconciliation). Assigned to sf-svc-orders."
+    },
+    {
+      "name": "payments:authorize",
+      "protocol": "openid-connect",
+      "description": "payments-svc POST /internal/v1/payments (LLD-06 §7.1). Assigned to sf-svc-orders."
     }
   ],
   "clients": [
@@ -443,7 +448,8 @@
         "cart:read",
         "catalog:quotes",
         "inventory:reservations:write",
-        "inventory:reservations:read"
+        "inventory:reservations:read",
+        "payments:authorize"
       ],
       "protocolMappers": [
         {

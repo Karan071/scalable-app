@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 (§2 cart-svc and §3-§6 orders-svc are built — see their own "As built" notes) |
+| Status | Draft v0.1 (§2 cart-svc, §3-§6 orders-svc, and §7-§8 payments-svc/mock-payment-provider are built — see their own "As built" notes) |
 | Milestone | M3 (happy path, idempotency, persisted saga) → M4 (async compensation, reconciliation, SSE) |
 | Services | cart-svc, orders-svc, payments-svc, mock-payment-provider |
 | ADRs | 0003, 0008, 0011, 0015 |
@@ -230,7 +230,7 @@ stateDiagram-v2
 | Broker down | Outbox rows accumulate. The sync path still works up to `AUTHORIZED`; async steps resume after recovery (FS-4). | Delayed, consistent |
 | Late `payment.succeeded` after cancel | Guard rejects the transition. Reconciliation R4 issues a refund. | cancelled + refunded |
 
-**As built (orders-svc, 2026-10-25).** §3-§6 (checkout, idempotency, the saga, and the order admin ops) are built; §7-§8 (payments-svc, the mock provider) are not — that's E3.6, next. Notes:
+**As built (orders-svc, 2026-10-25; two gaps closed 2026-10-25 while building §7-§8).** §3-§6 (checkout, idempotency, the saga, and the order admin ops) are built. Notes:
 
 - **§5.1's "par" snapshot+quote is sequential.** The quote needs the snapshot's own line items (sku_id/qty) to price; there's no way to start both at once. The sequence diagram's parallel pair is corrected to sequential here.
 - **§4's 409/402 response bodies carry only `title`, not `{lines: [...]}` or `{order_id}`.** ADR-0015 defines the problem-details shape as `type`/`title`/`status`/`detail`/`instance`/`correlation_id` plus `errors[]` for validation only — no precedent anywhere in this codebase for an arbitrary extension member. Same simplification as inventory-svc's `insufficient-stock` (LLD-07's own "As built" note).
@@ -240,8 +240,9 @@ stateDiagram-v2
 - **The command-ID scheme in §5.3 ("`{order_id}:{command}:{attempt_group}`") isn't built.** Idempotency for `inventory.commit_requested`/`payment.capture_requested`/etc. rests entirely on the *receiving* service's own guard (inventory-svc's reservation state, the saga's own guarded transitions) — a redelivered or duplicate command is already a no-op there, so the extra message-ID scheme wasn't needed to make anything safe. If a participant ever needs to deduplicate the command itself (not just its effect), this is the gap to close.
 - **`next_action_at` is set automatically, not per call site.** `repository.guarded_transition` stamps it to "now" for any non-terminal landing state (immediately eligible — a no-op recovery claim unless actually stuck, see above) and `NULL` for `COMPLETED`/`CANCELLED`, overridable when a caller needs a specific backoff (e.g. `AUTH_PENDING`'s 5s retry window). This wasn't in the original design; it's what makes "every in-flight saga is recoverable" actually true rather than true only for states someone remembered to set a timer on.
 - **Found while building this, fixed in cart-svc (§2):** the checkout request carries no `cart_id`, only `(customer_id, org_id)` — but cart-svc's internal snapshot endpoint was keyed by `cart_id` alone. Added `GET /internal/v1/customers/{customerId}/carts/{orgId}:snapshot` to cart-svc, reusing the existing `cart:read` scope. A gap neither §2 nor §3 could have caught in isolation; this is the kind of thing the delivery plan's rolling-wave feedback loop (§1's "findings, measurements" arrow back to earlier LLDs) is for.
+- **Two gaps found and fixed once payments-svc existed to test against** (§7-§8's own "As built" note has the full detail): `on_capture_failed` never actually released the authorization hold (no `payment.void_requested` command); and `PaymentsClient.authorize()` had no path for payments-svc's "202 unknown" response, so a provider-side timeout would have surfaced as an unhandled exception instead of the intended `AUTH_PENDING` transition. Also added: `on_payment_voided`/`on_payment_refunded`, closing the `payment_status` loop for both compensation paths.
 
-Deferred (this epic's own open items): R1's dedicated stuck-saga alerting (beyond the recovery worker's own pass), R2, R4, R5, R6 (all need payments-svc); R3 is buildable without it but out of scope for now, since deadline compensation already covers the common case it exists for; the idempotency table's 24h cleanup job; §10's long-poll (`GET /v1/orders/{id}/status?wait=`) accepts `wait` but answers immediately — it needs E4.7's redis-cache fan-out to actually wait.
+Deferred (this epic's own open items): R1's dedicated stuck-saga alerting (beyond the recovery worker's own pass); R3 (orphan reservations) is buildable now but out of scope for now, since deadline compensation already covers the common case it exists for; the idempotency table's 24h cleanup job; §10's long-poll (`GET /v1/orders/{id}/status?wait=`) accepts `wait` but answers immediately — it needs E4.7's redis-cache fan-out to actually wait.
 
 ## 6. Orders: state machine and tracking (FR-CHK-06, FR-CHK-07)
 
@@ -353,6 +354,18 @@ POST /webhooks/payments/mock      (gateway route → payments-svc; not via BFF)
 ```
 
 The provider retries webhooks with backoff on non-2xx. Processing time stays small; nothing slow runs inline.
+
+**As built (payments-svc + mock-payment-provider, 2026-10-25).** §7-§8 are built; only R4/R5/R6 (§9) still need more than R2 does. Notes:
+
+- **mock-payment-provider has no database.** It's explicitly "outside the trust boundary" (ADR-0008) and disposable — in-memory state, reset via `/__mock/reset`. The `/__mock/...:trigger_webhook` endpoint fires a specific pending webhook immediately; tests use it instead of sleeping out a real 15s/60s delay, same as the LLD's own "for tests" framing of the control API.
+- **Correlation via `metadata`, not just `provider_intent_id`.** §8.2 step 5 assumes the attempt is already found by `provider_intent_id`, but an attempt that hit the "unknown" path (§7.2) never got one synchronously. The mock provider echoes a caller-supplied `metadata.attempt_id` back in every webhook (the same mechanism real PSPs call `metadata`/`client_reference_id`), and the webhook handler falls back to it when `provider_intent_id` doesn't match anything yet. Not in the LLD's text; found necessary while implementing step 5 against the "unknown" state §7.2 itself defines.
+- **R2 resolves "unknown" by retrying the original `authorize` call (same idempotency key), not a status `GET`.** The mock provider — like most real PSPs — has no "look up an intent by idempotency key" endpoint, so a bare `GET /v1/payment_intents/{id}` is unreachable for an attempt whose synchronous call never returned an id. Replaying the exact request the provider already deduped is what actually resolves it.
+- **A failed capture is resolved as permanent on the first attempt**, not retried 5× internally (§7.2's `capturing -> authorized` revert happens immediately) — symmetric with orders-svc's own capture-retry simplification in this LLD's earlier "As built" note, for the same reason: the retry budget only matters once there's a real, occasionally-flaky PSP to retry against.
+- **No webhook retry-with-backoff on the provider's side.** §8.2's closing line ("the provider retries webhooks with backoff on non-2xx") isn't built — a failed delivery is logged and dropped. Low-risk precisely because this is a sandbox: nothing exercises that resilience path on purpose yet.
+- **payments-svc has no Casbin enforcer at all** — the first service in this build without one. Every route is `Internal(...)` (orders-svc, the only caller) or the webhook (`Public(...)` for `assert_routes_covered`'s bookkeeping, with the real guard being the HMAC signature check in the handler, not Casbin). There's no `Authorize(...)` route needing a live policy, so there's no `authz_reader`/redis-watcher wiring either.
+- **Closed two real gaps this surfaced in orders-svc** (corrections, not simplifications): `on_capture_failed` fired `inventory.restock_requested` but never released the authorization hold (`payment.void_requested` was missing entirely); and `PaymentsClient.authorize()` had no path for payments-svc's own "202 unknown" response, so a provider-side timeout would have been silently treated as if the HTTP call itself had hung rather than resolved fast with an ambiguous outcome — fixed by adding `PaymentPending`, handled the same as a network timeout.
+
+Verified live: mock-payment-provider and payments-svc booted together against the real dev stack, with a real authorize call producing a real signed webhook delivery, confirmed in `provider_webhooks` (`signature_valid = true`) — not asserted from a fake. The full six-service checkout through a real Keycloak login isn't exercised end-to-end yet; that's the Storefront UI (E3.7) or a dedicated system test's job.
 
 ## 9. Reconciliation, cancellation, and refund (FR-CHK-07, PRD §6.3)
 

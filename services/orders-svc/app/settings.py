@@ -26,15 +26,14 @@ class Settings(BaseServiceSettings):
     rabbitmq_user: str
     rabbitmq_password: str
 
-    # The checkout saga's synchronous participants (LLD-06 §5.1): cart-svc,
-    # catalog-svc, and inventory-svc all exist. One service identity
-    # (sf-svc-orders) covers all three scopes at once. payments-svc doesn't
-    # exist yet (E3.6) -- payments_svc_base_url is still read so config is
-    # ready, but every call to it fails until that service is built.
+    # The checkout saga's synchronous participants (LLD-06 §5.1): all four
+    # exist as of E3.6. One service identity (sf-svc-orders) covers every
+    # scope at once (cart:read, catalog:quotes, inventory:reservations:*,
+    # payments:authorize).
     cart_svc_base_url: str
     catalog_svc_base_url: str
     inventory_svc_base_url: str
-    payments_svc_base_url: str = "http://localhost:8199"
+    payments_svc_base_url: str = "http://localhost:8110"
     svc_orders_client_id: str = "sf-svc-orders"
     svc_orders_client_secret: str
 

@@ -4,13 +4,8 @@ cart-svc, catalog-svc, inventory-svc, and payments-svc.
 One ``ServiceTokenSource`` (one ``sf-svc-orders`` client-credentials token)
 is shared across all four -- unlike cart-svc/search-svc, which each call
 only one other service, orders-svc calls several, and the Keycloak client
-scopes (``cart:read``, ``catalog:quotes``, ``inventory:reservations:*``)
-all land on the one token at once.
-
-``PaymentsClient`` is written against LLD-06 §7's documented contract, but
-payments-svc doesn't exist yet (E3.6) -- every call to it fails (connection
-refused) until that service is built. Kept here, not stubbed out, so this
-module is the one place that changes when it lands.
+scopes (``cart:read``, ``catalog:quotes``, ``inventory:reservations:*``,
+``payments:authorize``) all land on the one token at once.
 """
 
 import time
@@ -263,6 +258,13 @@ class PaymentDeclined(Exception):
     pass
 
 
+class PaymentPending(Exception):
+    """payments-svc's own provider call timed out (LLD-06 §7.2's
+    "unknown" state) -- it answered fast with 202 rather than hanging
+    until its own budget expired, so orders-svc can move to
+    ``AUTH_PENDING`` immediately instead of also timing out itself."""
+
+
 class PaymentsClient(_BaseClient):
     async def authorize(
         self,
@@ -288,6 +290,8 @@ class PaymentsClient(_BaseClient):
         )
         if resp.status_code == 402:
             raise PaymentDeclined(order_id)
+        if resp.status_code == 202:
+            raise PaymentPending(order_id)
         resp.raise_for_status()
         body = resp.json()
         return AuthorizeResult(payment_id=UUID(body["payment_id"]), status=body["status"])

@@ -1,13 +1,12 @@
 """orders-svc's InboxConsumer dispatch tables (LLD-08 §2.1).
 
-``q.orders.inventory`` (real today -- inventory-svc exists and really
-publishes these): the async continuation past ``COMMITTING`` (LLD-06
-§5.1 steps 14-15).
+``q.orders.inventory``: the async continuation past ``COMMITTING``
+(LLD-06 §5.1 steps 14-15) -- real, inventory-svc publishes these.
 
-``q.orders.payments`` (not real yet -- payments-svc doesn't exist, E3.6):
-written against LLD-06 §7's documented events so this is the one place
-that changes when it lands. Declared now so the saga's async tail is
-complete and independently testable via ``event_handlers`` directly.
+``q.orders.payments``: real as of E3.6 (payments-svc exists). ``voided``/
+``refunded`` only update the ``payment_status`` projection (the saga is
+already terminal by the time either arrives); ``authorized``/``failed``/
+``succeeded`` drive the saga itself.
 
 Each handler ignores the ``session`` ``InboxConsumer`` hands it and opens
 its own transaction via ``session_factory`` -- the same reasoning as
@@ -71,8 +70,18 @@ def build_payments_dispatch(
             session_factory, order_id=UUID(data["order_id"]), payment_id=UUID(data["payment_id"])
         )
 
+    async def handle_voided(_session: AsyncSession, envelope: dict[str, Any]) -> None:
+        data = envelope["data"]
+        await service.on_payment_voided(session_factory, order_id=UUID(data["order_id"]))
+
+    async def handle_refunded(_session: AsyncSession, envelope: dict[str, Any]) -> None:
+        data = envelope["data"]
+        await service.on_payment_refunded(session_factory, order_id=UUID(data["order_id"]))
+
     return {
         "payment.authorized": handle_authorized,
         "payment.failed": handle_failed,
         "payment.succeeded": handle_succeeded,
+        "payment.voided": handle_voided,
+        "payment.refunded": handle_refunded,
     }

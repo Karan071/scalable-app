@@ -542,13 +542,15 @@ async def _do_authorize(
             reason="payment_declined",
         )
         return ActionResult(status_code=402, body={"title": "payment-declined"})
-    except (httpx.TimeoutException, httpx.TransportError):
-        # payments-svc unreachable or slow -- today that's because it
-        # doesn't exist yet (E3.6); in production it's a real provider
-        # timeout. Either way: AUTH_PENDING. LLD-06 §5.4: it's
-        # payments-svc that polls the provider from here, and a webhook
-        # that ultimately resolves it -- orders-svc's own recovery worker
-        # only compensates past the deadline (see its docstring).
+    except (httpx.TimeoutException, httpx.TransportError, clients.PaymentPending):
+        # Either orders-svc's own call to payments-svc timed out
+        # (connection-level), or payments-svc answered fast with its own
+        # "202 unknown" (its call to the provider timed out first,
+        # LLD-06 §7.2). Same outcome either way: AUTH_PENDING. LLD-06
+        # §5.4: it's payments-svc that polls the provider from here, and
+        # a webhook that ultimately resolves it -- orders-svc's own
+        # recovery worker only compensates past the deadline (see its
+        # docstring).
         async with transaction(session_factory) as session:
             await repository.guarded_transition(
                 session,
@@ -790,8 +792,13 @@ async def on_payment_succeeded(
 async def on_capture_failed(
     session_factory: async_sessionmaker[AsyncSession], *, order_id: UUID, org_id: UUID
 ) -> None:
-    """Simplified from LLD-06 §5.4's "retry ≤ 5, then restock + void":
-    this treats the first capture failure as permanent. See the LLD's "As
+    """Simplified from LLD-06 §5.4's "retry ≤ 5, then restock + void" and
+    §5.2's `RESTOCKING -> VOIDING: inventory.restocked` /
+    `VOIDING -> CANCELLED: payment.voided` edges: this treats the first
+    capture failure as permanent, and fires both compensating commands
+    together rather than waiting for each to confirm before issuing the
+    next -- the same fire-and-forget shape admin cancel already uses
+    (`_emit_cancellation_commands`), not a special case. See LLD-06's "As
     built" note -- the retry budget needs payments-svc to exist to be
     worth building against."""
     async with transaction(session_factory) as session:
@@ -813,11 +820,47 @@ async def on_capture_failed(
                 "lines": [{"sku_id": str(line.sku_id), "qty": line.qty} for line in lines],
             },
         )
+        await _emit_command(
+            session,
+            command_type="payment.void_requested",
+            routing_key="payment.void_requested.v1",
+            org_id=org_id,
+            order_id=order_id,
+            data={"order_id": str(order_id), "org_id": str(org_id)},
+        )
     async with transaction(session_factory) as session:
         await repository.guarded_transition(
             session, order_id, from_state="RESTOCKING", to_state="CANCELLED"
         )
     await _mark_order_cancelled(session_factory, order_id=order_id, reason="capture_failed")
+
+
+async def on_payment_voided(
+    session_factory: async_sessionmaker[AsyncSession], *, order_id: UUID
+) -> None:
+    """Closes the loop on the capture-failed compensation path (LLD-06
+    §6: "payment_status follows ... -> refunded", the same idea applied
+    to voided). The saga is already terminal by the time this arrives;
+    only ``payment_status`` (a projection) needs updating, no transition."""
+    async with transaction(session_factory) as session:
+        order = await repository.lock_order(session, order_id)
+        if order is None or order.payment_status == "voided":
+            return
+        repository.set_payment_status(order, "voided")
+
+
+async def on_payment_refunded(
+    session_factory: async_sessionmaker[AsyncSession], *, order_id: UUID
+) -> None:
+    """LLD-06 §6: cancellation/refund fire the command, but ``refunded``
+    only lands once payments-svc confirms it -- this is that
+    confirmation, for both the admin `:refund` endpoint and a
+    confirmed/processing order's cancellation refund."""
+    async with transaction(session_factory) as session:
+        order = await repository.lock_order(session, order_id)
+        if order is None or order.payment_status == "refunded":
+            return
+        repository.set_payment_status(order, "refunded")
 
 
 # --- recovery worker steps (LLD-06 §5.3) ------------------------------------
