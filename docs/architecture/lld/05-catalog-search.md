@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 (catalog-svc's core is built against it, 2026-10-24 — see §4's "As built") |
+| Status | Draft v0.1 (catalog-svc's core is built against it, 2026-10-24 — see §4's "As built"; §6's storefront reads built 2026-10-25, see its own "As built") |
 | Milestone | M3 (cache and experiments: M4) |
 | Services | catalog-svc (schema `catalog`, object storage), search-svc (schema `search`) |
 | ADRs | 0002, 0007, 0015 |
@@ -182,6 +182,8 @@ After commit, cache keys are deleted (LLD-09 §6).
 
 - **BFF composition:** product detail = catalog product + inventory availability, called in parallel with a 1 s budget each. If availability fails, the page shows "availability unknown" and checkout still validates (degraded, not failed).
 - **Public route rules:** `Public(rate_class=public, require_store_active=True)`. Only `active` products are visible.
+
+**As built (catalog-svc, 2026-10-25, E3.7).** Built against the table above, with two differences: no `require_store_active` enforcement (`sf_authz.Public` only ever took a `rate_class`, same as every other service's `Public(...)` route — there is no org-active gate on *any* existing public route, inventory-svc's availability endpoint included, so this isn't a new gap). No ready-images join either — there is no images subsystem yet (§5, §14's own open item), so the response is product + SKUs only. The BFF composition itself (catalog + inventory merged server-side in one BFF route) isn't built — the BFF only has a generic authenticated reverse proxy (LLD-01 §6), not a per-page composition layer, so `ProductDetailPage` (LLD-15) does the merge client-side with two parallel requests instead. Also added, beyond this table: `GET /v1/stores/{orgId}/skus?sku_ids=` — a public batch name/price lookup the cart page needs since cart-svc's own rows are just `sku_id`/`qty` (LLD-06 §2), mirroring inventory-svc's `availability?sku_ids=` batching; not in the original table because nothing had a cart page yet when §6 was written.
 
 ## 7. Search index (FR-COM-04)
 

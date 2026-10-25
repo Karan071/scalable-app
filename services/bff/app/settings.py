@@ -24,6 +24,14 @@ class Settings(BaseServiceSettings):
     users_svc_base_url: str
     orgs_svc_base_url: str
     authz_svc_base_url: str
+    catalog_svc_base_url: str
+    search_svc_base_url: str
+    cart_svc_base_url: str
+    inventory_svc_base_url: str
+    orders_svc_base_url: str
+    # payments-svc has no entry: every one of its routes is `Internal(...)`
+    # (orders-svc calls it service-to-service) or the provider webhook --
+    # nothing there is a route the browser should ever reach.
 
     # /api/** load-shedding cap (LLD-01 §6 step 1).
     api_proxy_max_concurrency: int = 100

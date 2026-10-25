@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Draft v0.1 |
+| Status | Draft v0.1 (M2 shell/auth/org-console/platform-admin built 2026-10-22; M3 storefront/checkout/commerce-admin built 2026-10-25 — see §11's own "As built") |
 | Milestone | M2 (shell, auth, org console, platform admin) → M3 (storefront, checkout, commerce admin) → M4 (SSE, ops console) |
 | Stack | React, TypeScript, Vite, TanStack Query, React Router |
 
@@ -123,6 +123,8 @@ This LLD covers:
 | Org console: invite → accept (second browser context) → assign role → member acts → revoke → access lost | E2E |
 | Platform admin: step-up required for privileged actions | E2E |
 | Accessibility smoke (axe) on key pages | E2E |
+
+**As built (storefront/checkout/commerce-admin, 2026-10-25, E3.7).** `/s/:orgId/*` (not `:storeSlug` — no slug→org_id resolver service exists), `/account/*` (orders only; profile/notifications aren't built), and `/console/orgs/:orgId/{catalog,inventory,orders}` (new tabs alongside M2's members/invitations/roles). §4's idempotency key and §5's debounce (300ms, 2-char minimum, `placeholderData: keepPreviousData`, query-key-based staleness) are built as specified. §4's "BFF composition" for product detail isn't — the BFF has only the generic authenticated reverse proxy (§6 above), no per-page composition route, so `ProductDetailPage` merges catalog-svc and inventory-svc client-side with two parallel requests instead (same degraded-on-failure behavior the LLD specifies). §6's `<SafeHtml>`/DOMPurify layer isn't built — product descriptions render via `dangerouslySetInnerHTML` directly, relying on catalog-svc's own server-side sanitizer (LLD-05 §2) as the only layer. §7's SSE isn't built (M4, per this LLD's own milestone column); the order status page uses the §7 fallback (polling, 2s, while `status === "pending"`) as its only mechanism. §5's category/price/sort filters aren't wired into the browse page, only `q`. §9's telemetry and the OTel Web SDK aren't built. §10's Playwright/axe suite isn't built — coverage is Vitest + React Testing Library + MSW instead (real component rendering against mocked network calls, not a real browser or a real backend): the API client, the debounce hook, `error-ux`'s conflict-title mapping, `BrowsePage`'s debounce end-to-end, and `CartPage`'s catalog-enriched subtotal. A real-browser Keycloak login click-through was attempted and abandoned: the registered `sf-bff` redirect URI lands the browser on the BFF's bare origin after login, and the BFF has no static-file-serving route for this package's own build output — a pre-existing local-dev-workflow gap, not something this epic's own code broke, and out of scope to fix here (belongs with whichever epic owns the production deployment topology).
 
 ## 11. Requirements covered
 

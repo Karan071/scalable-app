@@ -139,7 +139,10 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
 export const apiClient = {
   get: <T>(path: string, signal?: AbortSignal) => apiFetch<T>(path, { signal }),
-  post: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: 'POST', body }),
+  post: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+    apiFetch<T>(path, { method: 'POST', body, headers }),
+  put: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+    apiFetch<T>(path, { method: 'PUT', body, headers }),
   patch: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
     apiFetch<T>(path, { method: 'PATCH', body, headers }),
   delete: <T>(path: string, headers?: Record<string, string>) =>

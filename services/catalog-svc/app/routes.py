@@ -1,12 +1,14 @@
-"""catalog-svc HTTP routes (LLD-05 §4). Every route declares `Authorize(...)`
-or `Internal(...)` (LLD-02 §6); `org_domain_from_path()` resolves the org
-domain from the URL path, never the body (FR-ORG-05).
+"""catalog-svc HTTP routes (LLD-05 §4). Every route declares `Authorize(...)`,
+`Internal(...)`, or `Public(...)` (LLD-02 §6); `org_domain_from_path()`
+resolves the org domain from the URL path, never the body (FR-ORG-05).
 
-Deferred (this service's own open items, LLD-05 §14): product images and
-the public storefront reads (LLD-05 §6 — they need inventory-svc, which
-doesn't exist yet). The full-text search index lives in search-svc, which
-consumes this service's ``product.*`` events and its export endpoint below
-(LLD-05 §9) rather than being built here.
+Deferred (this service's own open items, LLD-05 §14): product images. The
+full-text search index lives in search-svc, which consumes this service's
+``product.*`` events and its export endpoint below (LLD-05 §9) rather than
+being built here. Listing/browse (LLD-05 §6's `/v1/stores/{orgId}/search`)
+is search-svc's own public route, not this service's -- the public routes
+here are only the single-product detail read and the category tree, the
+two LLD-05 §6 reads search-svc can't itself serve.
 """
 
 import base64
@@ -16,7 +18,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sf_authz import Authorize, Internal, Principal, org_domain_from_path
+from sf_authz import Authorize, Internal, Principal, Public, org_domain_from_path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import pricing, repository, service
@@ -30,6 +32,7 @@ _org_domain = org_domain_from_path()
 require_read_product = Authorize("product", "read", domain=_org_domain)
 require_create_product = Authorize("product", "create", domain=_org_domain)
 require_update_product = Authorize("product", "update", domain=_org_domain)
+require_storefront_read = Public(rate_class="storefront")
 
 require_read_category = Authorize("category", "read", domain=_org_domain)
 require_create_category = Authorize("category", "create", domain=_org_domain)
@@ -47,6 +50,7 @@ require_sku_read_scope = Internal("catalog:read_sku")
 
 _DEFAULT_LIMIT = 24
 _MAX_LIMIT = 48
+_MAX_STOREFRONT_SKU_LOOKUP = 50
 
 
 def _sf_uid(principal: Principal) -> UUID:
@@ -161,6 +165,59 @@ async def delete_category(
             status_code=409, detail="category has subcategories or products"
         ) from exc
     return {"status": "deleted"}
+
+
+# --- storefront (public) reads, LLD-05 §6 -----------------------------------
+
+
+@router.get("/v1/stores/{org_id}/categories", response_model=list[CategoryResponse])
+async def list_storefront_categories(
+    org_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_storefront_read),
+) -> list[CategoryResponse]:
+    return [_category_out(c) for c in await repository.list_categories(session, org_id)]
+
+
+class StorefrontSkuOut(BaseModel):
+    sku_id: UUID
+    product_id: UUID
+    product_name: str
+    price_minor: int
+
+
+class StorefrontSkuBatchResponse(BaseModel):
+    items: list[StorefrontSkuOut]
+
+
+@router.get("/v1/stores/{org_id}/skus", response_model=StorefrontSkuBatchResponse)
+async def list_storefront_skus(
+    org_id: UUID,
+    sku_ids: list[UUID] = Query(...),
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_storefront_read),
+) -> StorefrontSkuBatchResponse:
+    """Name/price for a batch of SKUs, keyed by id -- the cart page's only
+    way to show what a line item actually is, since cart-svc stores only
+    `sku_id`/`qty` (LLD-06 §2). Mirrors inventory-svc's public
+    `:sku_ids=` availability batching. The browser never sees the
+    `catalog:quotes`/`catalog:read_sku` internal endpoints -- this is the
+    public-safe subset of the same join (no sku/product status, which
+    would leak draft/archived state)."""
+    if len(sku_ids) > _MAX_STOREFRONT_SKU_LOOKUP:
+        raise HTTPException(status_code=422, detail="too many sku_ids")
+    rows = await repository.quote_inputs(session, org_id, sku_ids)
+    return StorefrontSkuBatchResponse(
+        items=[
+            StorefrontSkuOut(
+                sku_id=row.sku_id,
+                product_id=row.product_id,
+                product_name=row.product_name,
+                price_minor=row.price_minor,
+            )
+            for row in rows.values()
+        ]
+    )
 
 
 # --- products ------------------------------------------------------------------
@@ -288,6 +345,23 @@ async def get_product(
         raise HTTPException(status_code=404)
     skus = await repository.list_skus(session, product_id, org_id=org_id)
     response.headers["etag"] = f'"v{product.version}"'
+    return _product_out(product, skus)
+
+
+@router.get("/v1/stores/{org_id}/products/{slug}", response_model=ProductResponse)
+async def get_storefront_product(
+    org_id: UUID,
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_storefront_read),
+) -> ProductResponse:
+    """LLD-05 §6: only `active` products are visible publicly. Images are
+    deferred (no images subsystem exists yet, this service's own §14 item),
+    so this is product + SKUs, not product + SKUs + ready images."""
+    product = await repository.get_active_product_by_slug(session, org_id, slug)
+    if product is None:
+        raise HTTPException(status_code=404)
+    skus = await repository.list_skus(session, product.id, org_id=org_id)
     return _product_out(product, skus)
 
 

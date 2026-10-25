@@ -83,6 +83,14 @@ def _bff_env(idp: KeycloakIdP) -> dict[str, str]:
         SF_USERS_SVC_BASE_URL=f"http://127.0.0.1:{_PORTS['users-svc']}",
         SF_ORGS_SVC_BASE_URL=f"http://127.0.0.1:{_PORTS['orgs-svc']}",
         SF_AUTHZ_SVC_BASE_URL=f"http://127.0.0.1:{_PORTS['authz-svc']}",
+        # This test never calls /api/{catalog,search,cart,inventory,orders}
+        # -- these just need to be *some* valid value so Settings() doesn't
+        # raise on a missing required field.
+        SF_CATALOG_SVC_BASE_URL="http://127.0.0.1:1",
+        SF_SEARCH_SVC_BASE_URL="http://127.0.0.1:1",
+        SF_CART_SVC_BASE_URL="http://127.0.0.1:1",
+        SF_INVENTORY_SVC_BASE_URL="http://127.0.0.1:1",
+        SF_ORDERS_SVC_BASE_URL="http://127.0.0.1:1",
         SF_REDIS_SESSION_URL=_SESSION_REDIS_URL,
         SF_SESSION_ENC_KEYS=_SESSION_KEYS,
         SF_SESSION_ENC_PRIMARY_KID="k1",

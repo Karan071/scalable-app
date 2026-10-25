@@ -4,6 +4,9 @@ import { Button } from '@/components/ui/button'
 import { navigateToLogout, useRequireAuth } from '@/lib/session'
 
 const NAV_ITEMS = [
+  { to: 'catalog', label: 'Catalog' },
+  { to: 'inventory', label: 'Inventory' },
+  { to: 'orders', label: 'Orders' },
   { to: 'members', label: 'Members' },
   { to: 'invitations', label: 'Invitations' },
   { to: 'roles', label: 'Roles' },
@@ -55,6 +58,9 @@ export function ConsoleLayout() {
         </nav>
 
         <div className="mt-auto flex flex-col gap-2 border-t border-sidebar-border pt-4">
+          <Link to={`/s/${orgId}`} className="px-2.5 text-sm text-sidebar-foreground hover:underline">
+            View storefront
+          </Link>
           {(session.data.platform_roles?.length ?? 0) > 0 && (
             <Link to="/admin/orgs" className="px-2.5 text-sm text-sidebar-foreground hover:underline">
               Platform admin

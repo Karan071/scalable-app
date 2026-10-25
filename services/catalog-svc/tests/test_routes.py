@@ -390,3 +390,98 @@ def test_sku_lookup_404s_for_a_sku_from_another_org(client: TestClient) -> None:
     resp = client.get(f"/internal/v1/orgs/{org_a}/skus/{sku_id}")
 
     assert resp.status_code == 404
+
+
+def test_storefront_product_read_only_sees_published_products(client: TestClient) -> None:
+    org_id = _org_id()
+    draft = client.post(
+        f"/v1/orgs/{org_id}/products", json={"slug": "mug", "name": "Mug"}
+    ).json()
+
+    still_draft = client.get(f"/v1/stores/{org_id}/products/mug")
+    assert still_draft.status_code == 404
+
+    publish = client.post(
+        f"/v1/orgs/{org_id}/products/{draft['id']}:publish",
+        json={},
+        headers={"if-match": f'"v{draft["version"]}"'},
+    )
+    assert publish.status_code == 200, publish.text
+
+    live = client.get(f"/v1/stores/{org_id}/products/mug")
+    assert live.status_code == 200, live.text
+    body = live.json()
+    assert body["id"] == draft["id"]
+    assert body["status"] == "active"
+
+
+def test_storefront_product_read_404s_for_an_unknown_slug(client: TestClient) -> None:
+    resp = client.get(f"/v1/stores/{_org_id()}/products/does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_storefront_product_read_is_scoped_to_its_org(client: TestClient) -> None:
+    org_a, org_b = _org_id(), _org_id()
+    product = client.post(
+        f"/v1/orgs/{org_a}/products", json={"slug": "hat", "name": "Hat"}
+    ).json()
+    client.post(
+        f"/v1/orgs/{org_a}/products/{product['id']}:publish",
+        json={},
+        headers={"if-match": f'"v{product["version"]}"'},
+    )
+
+    resp = client.get(f"/v1/stores/{org_b}/products/hat")
+
+    assert resp.status_code == 404
+
+
+def test_storefront_skus_returns_name_and_price_for_a_batch(client: TestClient) -> None:
+    org_id = _org_id()
+    product = client.post(
+        f"/v1/orgs/{org_id}/products", json={"slug": "pen", "name": "Pen"}
+    ).json()
+    sku_id = str(uuid7())
+    client.put(
+        f"/v1/orgs/{org_id}/products/{product['id']}/skus/{sku_id}",
+        json={"sku_code": "PEN-1", "price_minor": 150},
+    )
+    unknown_id = str(uuid7())
+
+    resp = client.get(f"/v1/stores/{org_id}/skus", params={"sku_ids": [sku_id, unknown_id]})
+
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["sku_id"] == sku_id
+    assert items[0]["product_name"] == "Pen"
+    assert items[0]["price_minor"] == 150
+
+
+def test_storefront_skus_is_scoped_to_its_org(client: TestClient) -> None:
+    org_a, org_b = _org_id(), _org_id()
+    product = client.post(
+        f"/v1/orgs/{org_b}/products", json={"slug": "ruler", "name": "Ruler"}
+    ).json()
+    sku_id = str(uuid7())
+    client.put(
+        f"/v1/orgs/{org_b}/products/{product['id']}/skus/{sku_id}",
+        json={"sku_code": "RULER-1", "price_minor": 200},
+    )
+
+    resp = client.get(f"/v1/stores/{org_a}/skus", params={"sku_ids": [sku_id]})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"] == []
+
+
+def test_storefront_categories_lists_the_orgs_category_tree(client: TestClient) -> None:
+    org_id = _org_id()
+    created = client.post(
+        f"/v1/orgs/{org_id}/categories", json={"name": "Drinkware", "slug": "drinkware"}
+    ).json()
+
+    resp = client.get(f"/v1/stores/{org_id}/categories")
+
+    assert resp.status_code == 200, resp.text
+    assert [c["id"] for c in resp.json()] == [created["id"]]

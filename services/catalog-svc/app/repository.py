@@ -141,6 +141,17 @@ async def get_product(session: AsyncSession, product_id: UUID, *, org_id: UUID) 
     return (await session.execute(stmt)).scalars().one_or_none()
 
 
+async def get_active_product_by_slug(
+    session: AsyncSession, org_id: UUID, slug: str
+) -> Product | None:
+    """LLD-05 §6's storefront detail read -- only `active` products are
+    visible publicly, regardless of what a staff caller could see."""
+    stmt = select(Product).where(
+        Product.org_id == org_id, Product.slug == slug, Product.status == "active"
+    )
+    return (await session.execute(stmt)).scalars().one_or_none()
+
+
 async def list_products(
     session: AsyncSession,
     org_id: UUID,

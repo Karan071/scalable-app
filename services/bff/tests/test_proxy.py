@@ -10,8 +10,15 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from app.proxy import ConcurrencyGate, ForwardResult, ensure_fresh_access_token, translate_step_up
+from app.proxy import (
+    ConcurrencyGate,
+    ForwardResult,
+    _service_base_urls,
+    ensure_fresh_access_token,
+    translate_step_up,
+)
 from app.sessions import SessionRecord, key_hash
+from app.settings import Settings
 from fastapi import HTTPException
 
 
@@ -187,6 +194,14 @@ def test_translate_step_up_passes_through_non_401s() -> None:
     result = ForwardResult(status_code=200, headers=httpx.Headers({}), body=b"{}")
 
     assert translate_step_up(result) is None
+
+
+def test_service_base_urls_covers_every_commerce_service_but_not_payments() -> None:
+    urls = _service_base_urls(Settings())
+
+    expected = {"orgs", "authz", "users", "catalog", "search", "cart", "inventory", "orders"}
+    assert urls.keys() == expected
+    assert "payments" not in urls
 
 
 async def test_concurrency_gate_rejects_once_full() -> None:

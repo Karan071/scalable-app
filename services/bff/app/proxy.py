@@ -87,6 +87,17 @@ def _service_base_urls(settings: object) -> dict[str, str]:
         "orgs": settings.orgs_svc_base_url,  # type: ignore[attr-defined]
         "authz": settings.authz_svc_base_url,  # type: ignore[attr-defined]
         "users": settings.users_svc_base_url,  # type: ignore[attr-defined]
+        "catalog": settings.catalog_svc_base_url,  # type: ignore[attr-defined]
+        "search": settings.search_svc_base_url,  # type: ignore[attr-defined]
+        "cart": settings.cart_svc_base_url,  # type: ignore[attr-defined]
+        "inventory": settings.inventory_svc_base_url,  # type: ignore[attr-defined]
+        "orders": settings.orders_svc_base_url,  # type: ignore[attr-defined]
+        # payments-svc has no entry here -- every one of its routes is
+        # `Internal(...)` or the provider webhook, never something the
+        # browser's own access token should reach (LLD-15 §2: hiding a
+        # route from the proxy isn't a security control either way --
+        # `Internal` would 403 a user token on its own -- this is just
+        # not exposing a path with no legitimate caller).
     }
 
 

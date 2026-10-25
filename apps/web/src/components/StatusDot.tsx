@@ -19,6 +19,12 @@ const STATUS_TONE: Record<string, 'good' | 'warn' | 'bad' | 'neutral'> = {
   accepted: 'good',
   deletion_pending: 'warn',
   anonymized: 'neutral',
+  confirmed: 'good',
+  processing: 'warn',
+  shipped: 'good',
+  delivered: 'good',
+  cancelled: 'bad',
+  refunded: 'neutral',
 }
 
 export function StatusDot({ status }: { status: string }) {

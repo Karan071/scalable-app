@@ -18,6 +18,11 @@ os.environ.setdefault("SF_SVC_BFF_CLIENT_SECRET", "test-svc-secret")
 os.environ.setdefault("SF_USERS_SVC_BASE_URL", "http://users-svc.test")
 os.environ.setdefault("SF_ORGS_SVC_BASE_URL", "http://orgs-svc.test")
 os.environ.setdefault("SF_AUTHZ_SVC_BASE_URL", "http://authz-svc.test")
+os.environ.setdefault("SF_CATALOG_SVC_BASE_URL", "http://catalog-svc.test")
+os.environ.setdefault("SF_SEARCH_SVC_BASE_URL", "http://search-svc.test")
+os.environ.setdefault("SF_CART_SVC_BASE_URL", "http://cart-svc.test")
+os.environ.setdefault("SF_INVENTORY_SVC_BASE_URL", "http://inventory-svc.test")
+os.environ.setdefault("SF_ORDERS_SVC_BASE_URL", "http://orders-svc.test")
 os.environ.setdefault(
     "SF_SESSION_ENC_KEYS", '{"k1": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}'
 )
