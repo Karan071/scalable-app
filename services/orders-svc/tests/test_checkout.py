@@ -7,6 +7,7 @@ cart-svc/catalog-svc/inventory-svc/payments-svc without needing them
 running.
 """
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from uuid import UUID, uuid4, uuid7
@@ -17,6 +18,7 @@ from app import idempotency, service
 from app.models import CheckoutSaga, Order
 from fakes import FakeCartClient, FakeCatalogClient, FakeInventoryClient, FakePaymentsClient
 from sf_db import build_session_factory
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -328,3 +330,48 @@ async def test_checkout_double_click_two_keys_same_cart_version_is_one_order(
     assert first.status_code == 202, first.body
     assert second.status_code == 409, second.body
     assert second.body["title"] == "cart-changed"
+
+
+async def test_checkout_n_concurrent_keys_same_cart_version_is_still_one_order(
+    session_factory: async_sessionmaker, participants: service.Participants
+) -> None:
+    """LLD-14 §5's "two keys x same cart version | 1 order" row, for real
+    concurrent commits (not call-then-await-then-call-again): the sequential
+    test above proves the DB backstop (`uq_orders_cart_version_active`,
+    LLD-06 §3.1's "layer 3") rejects a *later* attempt; this proves it also
+    holds when every attempt's `INSERT` races the others for real, which
+    the fakes' lack of real network/DB latency can't otherwise exercise --
+    `transaction(session_factory)` still opens a genuine Postgres
+    connection per call, so the actual race is real even though
+    cart/catalog/inventory/payments are faked."""
+    org_id, customer_id, sku_id = uuid4(), uuid7(), uuid7()
+    participants.cart.seed(customer_id=customer_id, org_id=org_id, items=[(sku_id, 1)])
+    participants.catalog.add(org_id, sku_id)
+    participants.inventory.seed_stock(org_id, sku_id, 100)
+
+    outcomes = await asyncio.gather(
+        *[
+            _checkout(
+                session_factory,
+                participants,
+                customer_id=customer_id,
+                org_id=org_id,
+                idempotency_key=uuid7(),
+            )
+            for _ in range(20)
+        ]
+    )
+
+    accepted = [o for o in outcomes if o.status_code == 202]
+    rejected = [o for o in outcomes if o.status_code == 409]
+    assert len(accepted) == 1
+    assert len(rejected) == 19
+    assert all(o.body["title"] == "cart-changed" for o in rejected)
+
+    async with session_factory() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(Order)
+            .where(Order.customer_id == customer_id, Order.status != "cancelled")
+        )
+    assert count == 1

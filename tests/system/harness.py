@@ -65,10 +65,20 @@ class FakeIdP:
     the few Keycloak admin calls services make (they always succeed).
 
     ``token_delay_s`` makes the token endpoint answer slowly, standing in for
-    a degraded Keycloak (LLD-13 FS-3, slow dependency).
+    a degraded Keycloak (LLD-13 FS-3, slow dependency). ``client_scopes``
+    stands in for the realm's own ``defaultClientScopes`` (real Keycloak
+    hands a client-credentials caller every scope its client is configured
+    with, regardless of what it asks for in the request body -- our own
+    ``ServiceTokenSource`` doesn't even send a ``scope`` field, same as the
+    real one) -- a service identity not listed here gets the harness's
+    original fixed default (``orgs:read users:read``), so every existing
+    caller of this class keeps working unchanged.
     """
 
-    def __init__(self, *, token_delay_s: float = 0.0) -> None:
+    def __init__(
+        self, *, token_delay_s: float = 0.0, client_scopes: dict[str, str] | None = None
+    ) -> None:
+        self._client_scopes = client_scopes or {}
         self._key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         # Live view of callers stuck on the token endpoint (unlike RabbitMQ's
         # management stats, which refresh only every few seconds).
@@ -106,9 +116,16 @@ class FakeIdP:
                         idp.tokens_in_flight -= 1
                 form = parse_qs(self.rfile.read(int(self.headers["content-length"])).decode())
                 client_id = form["client_id"][0]
+                token_kwargs = {}
+                scope = idp._client_scopes.get(client_id)
+                if scope is not None:
+                    token_kwargs["scope"] = scope
                 self._reply(
                     json.dumps(
-                        {"access_token": idp.service_token(client_id), "expires_in": 300}
+                        {
+                            "access_token": idp.service_token(client_id, **token_kwargs),
+                            "expires_in": 300,
+                        }
                     ).encode()
                 )
 
