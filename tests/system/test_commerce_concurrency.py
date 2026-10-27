@@ -65,8 +65,14 @@ _PORTS = {
     "payments-svc": 18155,
     "mock-payment-provider": 18156,
 }
-_SETTLE_TIMEOUT_S = 30.0
+_SETTLE_TIMEOUT_S = 90.0
 _CUSTOMER_POOL_SIZE = 80
+# Each concurrent checkout fans out across 5 services' own DB pools at
+# once (request-handling pool plus a relay/consumer/recovery engine apiece,
+# LLD-09 §2's bulkhead pattern), on the same Postgres as whatever else is
+# running on this machine -- that's what raised local Postgres's
+# max_connections from the image default (100) to 300 (deploy/compose/
+# compose.yaml). N:S stays > 2x either way, which is what the invariant needs.
 _N_CUSTOMERS = 50
 _STOCK = 20
 _N_KEYS = 20
