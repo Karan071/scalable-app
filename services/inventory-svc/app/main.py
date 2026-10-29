@@ -28,12 +28,13 @@ from sf_messaging import (
     RELAY_POOL_SIZE,
     InboxConsumer,
     OutboxRelay,
+    build_dlq_router,
 )
 from sqlalchemy import text
 
 from . import event_handlers
 from .db import build_inventory_engine, build_inventory_session_factory
-from .routes import router
+from .routes import require_dlq_scope, router
 from .settings import Settings
 from .sweeper import ExpirySweeper
 
@@ -55,6 +56,14 @@ def _asyncpg_dsn(settings: Settings) -> str:
         f"postgresql://{settings.db_user}:{settings.db_password}"
         f"@{settings.db_host}:{settings.db_port}/{settings.db_name}"
     )
+
+
+# LLD-08 §7.1 DLQ inspect/replay/discard (E4.5): its own tiny pool (LLD-09
+# §2's bulkhead pattern -- an ops action can't contend with request
+# handling or the relay/consumers for a connection), built at module scope
+# because the router it backs must exist before `assert_routes_covered`
+# runs below, which is before `lifespan` ever starts.
+_dlq_engine = build_inventory_engine(settings, **worker_pool(2))
 
 
 @asynccontextmanager
@@ -150,6 +159,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await catalog_consumer_engine.dispose()
     await commands_consumer_engine.dispose()
     await sweeper_engine.dispose()
+    await _dlq_engine.dispose()
 
 
 async def _db_ready() -> bool:
@@ -187,5 +197,16 @@ app.include_router(
     build_health_router(readiness_checks=[_db_ready, _authz_ready, _background_workers_ready])
 )
 app.include_router(router)
+app.include_router(
+    build_dlq_router(
+        service_name="inventory-svc",
+        queue_names=["q.inventory.catalog", "q.inventory.commands"],
+        amqp_url=_amqp_url(settings),
+        session_factory=build_inventory_session_factory(_dlq_engine),
+        notify_channel="outbox_inventory",
+        auth=require_dlq_scope,
+        principal_dependency=require_dlq_scope,
+    )
+)
 assert_routes_covered(app)
 instrument_fastapi_app(app)

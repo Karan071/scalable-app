@@ -23,6 +23,10 @@ _org_domain = org_domain_from_path()
 
 require_reservations_write = Internal("inventory:reservations:write")
 require_reservations_read = Internal("inventory:reservations:read")
+#: LLD-08 §7.1 DLQ inspect/replay/discard (E4.5) -- services/inventory-svc/app/main.py
+#: mounts sf_messaging's own router with this as both its auth guard and
+#: its Principal dependency.
+require_dlq_scope = Internal("dlq:manage")
 require_availability_public = Public(rate_class="availability")
 require_stock_read = Authorize("stock", "read", domain=_org_domain)
 require_stock_adjust = Authorize("stock", "adjust", domain=_org_domain)
