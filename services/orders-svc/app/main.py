@@ -17,7 +17,9 @@ from sf_authz import (
 )
 from sf_common import (
     Bulkhead,
+    BulkheadFullError,
     CircuitBreaker,
+    CircuitOpenError,
     CorrelationIdMiddleware,
     RetryBudget,
     build_health_router,
@@ -240,7 +242,11 @@ async def _background_workers_ready() -> bool:
 
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
-install_problem_details(app, db_busy_errors=POOL_TIMEOUT_ERRORS)
+install_problem_details(
+    app,
+    db_busy_errors=POOL_TIMEOUT_ERRORS,
+    dependency_unavailable_errors=(CircuitOpenError, BulkheadFullError),
+)
 app.include_router(
     build_health_router(readiness_checks=[_db_ready, _authz_ready, _background_workers_ready])
 )

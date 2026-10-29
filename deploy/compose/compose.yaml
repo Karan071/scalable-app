@@ -216,6 +216,25 @@ services:
     ports:
       - "9090:9090" # UI + API
 
+  toxiproxy:
+    # Failure injection for Compose (LLD-13 §3/§4, E4.8): the admin API
+    # (8474) creates/removes proxies and toxics at test-run time --
+    # nothing is pre-declared here. System-test services are host
+    # processes, not containers (tests/system/harness.py), so a proxy's
+    # upstream is `host.docker.internal:<port>` (Docker Desktop resolves
+    # this to the host without extra config on macOS/Windows) and its
+    # listen port is published below so those host processes can reach it
+    # back through localhost. 20000-20009 is a fixed block the test suite
+    # picks fixed ports from, not a dynamic range -- Compose can't publish
+    # ports it doesn't know about ahead of time.
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474" # admin API
+      - "20000-20009:20000-20009" # proxy listen ports (tests/system/toxiproxy.py)
+    # No healthcheck: minimal static binary, no shell (same reasoning as
+    # mailpit/jaeger above); tests/system/toxiproxy.py polls the admin API
+    # itself and skips if it's unreachable.
+
 volumes:
   pgdata:
   redis-session-data:

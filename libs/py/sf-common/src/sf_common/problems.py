@@ -52,13 +52,25 @@ def _problem(
 
 
 def install_problem_details(
-    app: FastAPI, *, db_busy_errors: Sequence[type[Exception]] = ()
+    app: FastAPI,
+    *,
+    db_busy_errors: Sequence[type[Exception]] = (),
+    dependency_unavailable_errors: Sequence[type[Exception]] = (),
 ) -> None:
     """Register handlers so every error response is ``application/problem+json``.
 
     ``db_busy_errors``: exception types meaning "no DB connection available
     in time" (``sf_db.POOL_TIMEOUT_ERRORS``), answered with LLD-09 §2's
     fail-fast ``503 db-busy`` instead of a 500.
+
+    ``dependency_unavailable_errors``: ``sf_common.CircuitOpenError`` and
+    ``BulkheadFullError`` (LLD-13 §2.3-§2.4) -- both classes' own docstrings
+    promise "503 dependency-unavailable", but neither raises it itself; this
+    is where that promise is actually kept, for whichever service passes
+    them in (today: orders-svc, the one real caller wired in E4.6). Without
+    this, a breaker-open or bulkhead-full call fell through to the generic
+    500 handler below -- found via E4.8's own failure injection, not by
+    inspection.
     """
 
     @app.exception_handler(HTTPException)
@@ -95,3 +107,15 @@ def install_problem_details(
 
     for exc_type in db_busy_errors:
         app.add_exception_handler(exc_type, _db_busy)
+
+    async def _dependency_unavailable(request: Request, exc: Exception) -> JSONResponse:
+        return _problem(
+            503,
+            "dependency-unavailable",
+            "A downstream dependency is unavailable. Retry shortly.",
+            request,
+            headers={"retry-after": "1"},
+        )
+
+    for exc_type in dependency_unavailable_errors:
+        app.add_exception_handler(exc_type, _dependency_unavailable)

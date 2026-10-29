@@ -113,3 +113,35 @@ def test_pool_exhaustion_is_503_db_busy_with_retry_after() -> None:
     assert response.headers["retry-after"] == "1"
     assert response.json()["title"] == "db-busy"
     assert response.json()["correlation_id"]
+
+
+class _BreakerOpen(Exception):
+    pass
+
+
+class _BulkheadFull(Exception):
+    pass
+
+
+def test_circuit_open_and_bulkhead_full_are_503_dependency_unavailable() -> None:
+    """LLD-13 §2.3-§2.4: both classes' docstrings promise this status and
+    title; this is what actually keeps that promise for a service that
+    opts in (E4.8 found the gap: neither raised it on its own)."""
+    app = FastAPI()
+    install_problem_details(app, dependency_unavailable_errors=(_BreakerOpen, _BulkheadFull))
+
+    @app.get("/breaker")
+    def breaker() -> None:
+        raise _BreakerOpen()
+
+    @app.get("/bulkhead")
+    def bulkhead() -> None:
+        raise _BulkheadFull()
+
+    client = TestClient(app)
+    for path in ("/breaker", "/bulkhead"):
+        response = client.get(path)
+        assert response.status_code == 503
+        assert response.headers["content-type"] == "application/problem+json"
+        assert response.headers["retry-after"] == "1"
+        assert response.json()["title"] == "dependency-unavailable"
