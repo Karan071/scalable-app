@@ -15,6 +15,14 @@ class Settings(BaseServiceSettings):
 
     app_origin: str
     return_to_allowed_prefixes: list[str] = ["/"]
+    # apps/web's built SPA (`pnpm build` -> dist/). Unset locally skips the
+    # static/SPA-fallback route entirely (every existing deployment and the
+    # system-test harness never set this, so behavior there is unchanged);
+    # in Kubernetes this stays unset too (LLD-12 §6 routes static assets to
+    # a separate `web` backend at the gateway) -- this is a local-dev-only
+    # convenience so a real browser can complete a login round trip without
+    # that gateway in front (LLD-15 §11's own "as built" note).
+    web_dist_dir: str | None = None
     # Production is always True; local HTTP-only testing (no TLS terminator
     # in front of this process) sets it False so cookies actually round-trip.
     cookie_secure: bool = True
@@ -37,6 +45,14 @@ class Settings(BaseServiceSettings):
     api_proxy_max_concurrency: int = 100
 
     redis_session_url: str = "redis://localhost:6379/0"
+    # LLD-09 §7: rate-limit buckets, shared across replicas -- a different
+    # Redis instance than session storage (redis-cache vs redis-session,
+    # ADR-0010), so a cache-only outage never affects sessions.
+    redis_cache_url: str = "redis://localhost:6380/0"
+    # One BFF replica's own view of how many siblings it has, purely for
+    # the §7.2 Redis-outage fallback's "limit / replica_count" math -- not
+    # service discovery; nothing here coordinates with other replicas.
+    rate_limit_replica_count: int = 1
 
     # {kid: base64-encoded 32-byte key}; newest-added key encrypts (LLD-01 §5.5).
     session_enc_keys: dict[str, str]

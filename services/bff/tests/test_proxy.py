@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from app.csrf import derive_csrf_token
+from app.main import app as real_app
 from app.proxy import (
     ConcurrencyGate,
     ForwardResult,
@@ -20,6 +22,7 @@ from app.proxy import (
 from app.sessions import SessionRecord, key_hash
 from app.settings import Settings
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 
 def _record(*, at_exp: int) -> SessionRecord:
@@ -212,3 +215,95 @@ async def test_concurrency_gate_rejects_once_full() -> None:
 
     await gate.release()
     assert await gate.try_acquire() is True
+
+
+class _FakeSessions:
+    def __init__(self, record: SessionRecord) -> None:
+        self._record = record
+
+    async def load(self, session_id: str, *, idle_s: int) -> SessionRecord:
+        return self._record
+
+
+class _AlwaysAllowRateLimiter:
+    async def check(self, _rate_class: object, _key: str, *, cost: int = 1) -> SimpleNamespace:
+        return SimpleNamespace(allowed=True, remaining=999, retry_after_s=-1.0, reset_after_s=0.0)
+
+
+class _AlwaysRejectRateLimiter:
+    def __init__(self) -> None:
+        self.checked_with: list[tuple[object, str]] = []
+
+    async def check(self, rate_class: object, key: str, *, cost: int = 1) -> SimpleNamespace:
+        self.checked_with.append((rate_class, key))
+        return SimpleNamespace(allowed=False, remaining=0, retry_after_s=7.0, reset_after_s=30.0)
+
+
+def test_idempotency_key_and_if_match_are_forwarded_downstream() -> None:
+    """A real end-to-end browser run (tests/system/test_checkout_browser.py)
+    found checkout always failing with a 422 "Idempotency-Key required"
+    through the BFF: ``forward()`` builds its own header set from scratch,
+    and before this test, that set was only Authorization/correlation/
+    traceparent -- every header the SPA actually sends beyond those
+    (LLD-06 §4's ``Idempotency-Key``; ``If-Match`` on catalog/inventory/
+    orders/authz's own optimistic-locking routes, apps/web/src/lib/api/
+    *.ts) was silently dropped before reaching the downstream service."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.headers)
+        return httpx.Response(202, json={"ok": True})
+
+    real_app.state.settings = Settings()
+    real_app.state.sessions = _FakeSessions(_record(at_exp=int(time.time()) + 300))
+    real_app.state.api_proxy_gate = ConcurrencyGate(max_concurrency=100)
+    real_app.state.rate_limiter = _AlwaysAllowRateLimiter()
+    real_app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    client = TestClient(real_app, base_url="https://app.test", raise_server_exceptions=False)
+    client.cookies.set("__Host-sf_session", "test-session-id")
+    token = derive_csrf_token("csrf-secret")
+
+    resp = client.post(
+        "/api/orders/v1/stores/org-1/checkouts",
+        headers={
+            "origin": "https://app.test",
+            "x-csrf-token": token,
+            "idempotency-key": "idem-key-123",
+            "if-match": '"v4"',
+        },
+        json={},
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert captured.get("idempotency-key") == "idem-key-123"
+    assert captured.get("if-match") == '"v4"'
+
+
+def test_a_rate_limited_request_gets_a_429_before_touching_the_downstream_service() -> None:
+    called = False
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={})
+
+    limiter = _AlwaysRejectRateLimiter()
+    real_app.state.settings = Settings()
+    real_app.state.sessions = _FakeSessions(_record(at_exp=int(time.time()) + 300))
+    real_app.state.api_proxy_gate = ConcurrencyGate(max_concurrency=100)
+    real_app.state.rate_limiter = limiter
+    real_app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    client = TestClient(real_app, base_url="https://app.test", raise_server_exceptions=False)
+    client.cookies.set("__Host-sf_session", "test-session-id")
+
+    resp = client.get("/api/catalog/v1/stores/org-1/products/widget", headers={})
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["title"] == "rate-limited"
+    assert resp.headers["retry-after"] == "7"
+    assert called is False  # never reached the mocked downstream handler
+    (rate_class, key) = limiter.checked_with[0]
+    assert rate_class.name == "public"  # GET, not search/checkout -> classify()'s default
+    assert key == "user:u1"  # _record()'s own fixed uid

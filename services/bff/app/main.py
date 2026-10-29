@@ -3,6 +3,7 @@
 import urllib.parse
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
@@ -21,9 +22,11 @@ from .event_consumer import IdentityEventConsumer
 from .oidc import OidcClient, discover
 from .proxy import ConcurrencyGate
 from .proxy import router as api_router
+from .ratelimit import RateLimiter
 from .routes_auth import router as auth_router
 from .sessions import SessionStore
 from .settings import Settings
+from .spa import build_spa_router
 from .users_client import ServiceTokenSource, UsersClient
 
 settings = Settings()
@@ -43,6 +46,7 @@ def _amqp_url(settings: Settings) -> str:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     http_client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
     redis: Redis = Redis.from_url(settings.redis_session_url, decode_responses=True)
+    redis_cache: Redis = Redis.from_url(settings.redis_cache_url, decode_responses=True)
 
     discovery = await discover(http_client, settings.oidc_issuer)
     oidc = OidcClient(
@@ -72,6 +76,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         http_client, base_url=settings.users_svc_base_url, token_source=token_source
     )
     app.state.api_proxy_gate = ConcurrencyGate(settings.api_proxy_max_concurrency)
+    app.state.rate_limiter = RateLimiter(
+        redis_cache, replica_count=settings.rate_limit_replica_count
+    )
 
     identity_consumer = IdentityEventConsumer(
         redis=redis,
@@ -87,6 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await identity_consumer.stop()
     await http_client.aclose()
     await redis.aclose()
+    await redis_cache.aclose()
 
 
 async def _redis_ready() -> bool:
@@ -110,4 +118,9 @@ install_problem_details(app)
 app.include_router(build_health_router(readiness_checks=[_redis_ready, _identity_consumer_ready]))
 app.include_router(auth_router)
 app.include_router(api_router)
+if settings.web_dist_dir is not None:
+    dist_dir = Path(settings.web_dist_dir)
+    if dist_dir.is_dir():
+        # Registered last: /api/** and /auth/** above always match first.
+        app.include_router(build_spa_router(dist_dir))
 instrument_fastapi_app(app)

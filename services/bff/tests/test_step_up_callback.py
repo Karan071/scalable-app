@@ -12,7 +12,7 @@ from app.main import app as real_app
 from app.oidc import generate_pkce
 from fastapi.testclient import TestClient
 from sf_authz import Principal
-from test_csrf_routes import FakeSessions, _record
+from test_csrf_routes import AlwaysAllowRateLimiter, FakeSessions, _record
 
 _OLD_SESSION = "pre-step-up-session"
 _BINDING = "binding-cookie-value"
@@ -60,6 +60,7 @@ def _callback(
     real_app.state.redis = None
     real_app.state.sessions = sessions
     real_app.state.oidc = _SteppedUpOidc(acr=acr, auth_time=auth_time)
+    real_app.state.rate_limiter = AlwaysAllowRateLimiter()
     client = TestClient(real_app, base_url="https://app.test")
     client.cookies.set("__Host-sf_session", _OLD_SESSION)
     client.cookies.set("__Host-sf_auth", _BINDING)

@@ -394,9 +394,7 @@ def test_sku_lookup_404s_for_a_sku_from_another_org(client: TestClient) -> None:
 
 def test_storefront_product_read_only_sees_published_products(client: TestClient) -> None:
     org_id = _org_id()
-    draft = client.post(
-        f"/v1/orgs/{org_id}/products", json={"slug": "mug", "name": "Mug"}
-    ).json()
+    draft = client.post(f"/v1/orgs/{org_id}/products", json={"slug": "mug", "name": "Mug"}).json()
 
     still_draft = client.get(f"/v1/stores/{org_id}/products/mug")
     assert still_draft.status_code == 404
@@ -420,11 +418,61 @@ def test_storefront_product_read_404s_for_an_unknown_slug(client: TestClient) ->
     assert resp.status_code == 404
 
 
+def test_storefront_product_read_reflects_an_archive_immediately(client: TestClient) -> None:
+    """LLD-09 §6.1: the storefront-product cache (300s TTL) is invalidated
+    by `:archive`, not left to go stale for up to five minutes -- real
+    redis-cache, not a fake, so this also proves the cache is actually
+    being populated by the read above, not merely "didn't crash" (routes.py's
+    own ``get_or_load`` wiring)."""
+    org_id = _org_id()
+    draft = client.post(f"/v1/orgs/{org_id}/products", json={"slug": "lamp", "name": "Lamp"}).json()
+    client.post(
+        f"/v1/orgs/{org_id}/products/{draft['id']}:publish",
+        json={},
+        headers={"if-match": f'"v{draft["version"]}"'},
+    )
+    cached = client.get(f"/v1/stores/{org_id}/products/lamp")
+    assert cached.status_code == 200
+    published = cached.json()
+
+    archive = client.post(
+        f"/v1/orgs/{org_id}/products/{draft['id']}:archive",
+        json={},
+        headers={"if-match": f'"v{published["version"]}"'},
+    )
+    assert archive.status_code == 200, archive.text
+
+    after_archive = client.get(f"/v1/stores/{org_id}/products/lamp")
+    assert after_archive.status_code == 404, after_archive.text
+
+
+def test_storefront_product_read_reflects_an_update_immediately(client: TestClient) -> None:
+    org_id = _org_id()
+    draft = client.post(
+        f"/v1/orgs/{org_id}/products", json={"slug": "vase", "name": "Original Name"}
+    ).json()
+    client.post(
+        f"/v1/orgs/{org_id}/products/{draft['id']}:publish",
+        json={},
+        headers={"if-match": f'"v{draft["version"]}"'},
+    )
+    cached = client.get(f"/v1/stores/{org_id}/products/vase")
+    assert cached.json()["name"] == "Original Name"
+
+    update = client.patch(
+        f"/v1/orgs/{org_id}/products/{draft['id']}",
+        json={"name": "Updated Name"},
+        headers={"if-match": f'"v{cached.json()["version"]}"'},
+    )
+    assert update.status_code == 200, update.text
+
+    after_update = client.get(f"/v1/stores/{org_id}/products/vase")
+    assert after_update.json()["name"] == "Updated Name"
+
+
 def test_storefront_product_read_is_scoped_to_its_org(client: TestClient) -> None:
     org_a, org_b = _org_id(), _org_id()
-    product = client.post(
-        f"/v1/orgs/{org_a}/products", json={"slug": "hat", "name": "Hat"}
-    ).json()
+    product = client.post(f"/v1/orgs/{org_a}/products", json={"slug": "hat", "name": "Hat"}).json()
     client.post(
         f"/v1/orgs/{org_a}/products/{product['id']}:publish",
         json={},
@@ -438,9 +486,7 @@ def test_storefront_product_read_is_scoped_to_its_org(client: TestClient) -> Non
 
 def test_storefront_skus_returns_name_and_price_for_a_batch(client: TestClient) -> None:
     org_id = _org_id()
-    product = client.post(
-        f"/v1/orgs/{org_id}/products", json={"slug": "pen", "name": "Pen"}
-    ).json()
+    product = client.post(f"/v1/orgs/{org_id}/products", json={"slug": "pen", "name": "Pen"}).json()
     sku_id = str(uuid7())
     client.put(
         f"/v1/orgs/{org_id}/products/{product['id']}/skus/{sku_id}",

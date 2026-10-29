@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted v1.0 — M1 closed; M2 (Identity and multi-tenancy) in progress |
+| Status | Accepted v1.0 — M1/M2 closed; M3 (Commerce) effectively complete; M4 (Performance and distribution) in progress |
 | Source | [PRD.md](../PRD.md) v1.0 (Draft for review) |
-| Last updated | 2026-10-17 |
-| Scope | M1 design is accepted. M2 implementation is starting; see [delivery plan](00-delivery-plan.md). |
+| Last updated | 2026-10-29 |
+| Scope | See [delivery plan](00-delivery-plan.md) for the current milestone breakdown and what's actually built vs. deferred at each one. |
 
 This folder turns the PRD into a reviewable architecture. The work runs in three layers:
 

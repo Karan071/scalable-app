@@ -14,15 +14,17 @@ two LLD-05 §6 reads search-svc can't itself serve.
 import base64
 import json
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sf_authz import Authorize, Internal, Principal, Public, org_domain_from_path
+from sf_common import BulkheadFullError, CacheClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import pricing, repository, service
-from .db import get_session
+from .db import get_product_cache, get_session
 from .models import Category, Product, Promotion, Sku
 
 router = APIRouter()
@@ -348,21 +350,48 @@ async def get_product(
     return _product_out(product, skus)
 
 
+def _product_cache_key(org_id: UUID, slug: str) -> str:
+    return f"cat:v1:prod:{org_id}:{slug}"
+
+
 @router.get("/v1/stores/{org_id}/products/{slug}", response_model=ProductResponse)
 async def get_storefront_product(
     org_id: UUID,
     slug: str,
     session: AsyncSession = Depends(get_session),
+    product_cache: CacheClient = Depends(get_product_cache),
     _: None = Depends(require_storefront_read),
 ) -> ProductResponse:
     """LLD-05 §6: only `active` products are visible publicly. Images are
     deferred (no images subsystem exists yet, this service's own §14 item),
-    so this is product + SKUs, not product + SKUs + ready images."""
-    product = await repository.get_active_product_by_slug(session, org_id, slug)
-    if product is None:
-        raise HTTPException(status_code=404)
-    skus = await repository.list_skus(session, product.id, org_id=org_id)
-    return _product_out(product, skus)
+    so this is product + SKUs, not product + SKUs + ready images.
+
+    Cached per LLD-09 §6.1 (`cat:v1:prod:{org}:{slug}`, 300s TTL ± jitter,
+    invalidated by `update_product`/`publish_product`/`archive_product`
+    below). The same row's negative-lookup cache (`cat:v1:prod404:*`,
+    "delete on create") isn't built -- a 404 here always costs a real DB
+    query, a documented gap, not a correctness issue. A SKU-only edit
+    (price, stock) isn't invalidated either (only a product-level field
+    is) -- bounded by this cache's own 300s TTL, same staleness class as
+    any of this table's other rows.
+    """
+
+    async def load() -> tuple[int, dict[str, Any]]:
+        product = await repository.get_active_product_by_slug(session, org_id, slug)
+        if product is None:
+            raise HTTPException(status_code=404)
+        skus = await repository.list_skus(session, product.id, org_id=org_id)
+        return product.version, _product_out(product, skus).model_dump(mode="json")
+
+    try:
+        cached = await product_cache.get_or_load(
+            _product_cache_key(org_id, slug), loader=load, ttl_s=300.0
+        )
+    except BulkheadFullError as exc:
+        raise HTTPException(
+            status_code=503, detail="cache-busy", headers={"retry-after": "1"}
+        ) from exc
+    return ProductResponse.model_validate(cached)
 
 
 class UpdateProductRequest(BaseModel):
@@ -386,9 +415,11 @@ async def update_product(
     product_id: UUID,
     body: UpdateProductRequest,
     response: Response,
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(require_update_product),
     if_match: str = Header(..., alias="If-Match"),
     session: AsyncSession = Depends(get_session),
+    product_cache: CacheClient = Depends(get_product_cache),
 ) -> ProductResponse:
     try:
         product = await service.update_product(
@@ -414,6 +445,10 @@ async def update_product(
     except service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail="category not found") from exc
     response.headers["etag"] = f'"v{product.version}"'
+    # After the response (and this request's own commit, via get_session's
+    # dependency teardown) -- never inline, get_product_cache's own
+    # docstring has the "why".
+    background_tasks.add_task(product_cache.invalidate, _product_cache_key(org_id, product.slug))
     return _product_out(product)
 
 
@@ -429,6 +464,8 @@ async def _transition(
     principal: Principal,
     if_match: str,
     session: AsyncSession,
+    background_tasks: BackgroundTasks,
+    product_cache: CacheClient,
 ) -> ProductResponse:
     try:
         product = await service.transition_product(
@@ -449,6 +486,11 @@ async def _transition(
         ) from exc
     except service.InvalidTransition as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # publish/archive are exactly the transitions that flip storefront
+    # visibility (LLD-05 §6), so this cache is never allowed to lag behind
+    # one past its TTL -- see get_product_cache's own docstring re: why
+    # this is a background task, not an inline call.
+    background_tasks.add_task(product_cache.invalidate, _product_cache_key(org_id, product.slug))
     return _product_out(product)
 
 
@@ -457,9 +499,11 @@ async def publish_product(
     org_id: UUID,
     product_id: UUID,
     body: TransitionRequest,
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(require_update_product),
     if_match: str = Header(..., alias="If-Match"),
     session: AsyncSession = Depends(get_session),
+    product_cache: CacheClient = Depends(get_product_cache),
 ) -> ProductResponse:
     return await _transition(
         org_id,
@@ -468,6 +512,8 @@ async def publish_product(
         principal=principal,
         if_match=if_match,
         session=session,
+        background_tasks=background_tasks,
+        product_cache=product_cache,
     )
 
 
@@ -476,9 +522,11 @@ async def archive_product(
     org_id: UUID,
     product_id: UUID,
     body: TransitionRequest,
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(require_update_product),
     if_match: str = Header(..., alias="If-Match"),
     session: AsyncSession = Depends(get_session),
+    product_cache: CacheClient = Depends(get_product_cache),
 ) -> ProductResponse:
     return await _transition(
         org_id,
@@ -487,6 +535,8 @@ async def archive_product(
         principal=principal,
         if_match=if_match,
         session=session,
+        background_tasks=background_tasks,
+        product_cache=product_cache,
     )
 
 

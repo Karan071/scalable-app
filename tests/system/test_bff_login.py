@@ -58,6 +58,7 @@ class Stack:
     kc: KeycloakAdmin
     bff_replicas: list[str]
     users: list[KcUser]
+    _next_browser_ip: int = 1
 
     async def user(self, *, mfa_required: bool = False) -> KcUser:
         user = await self.kc.create_user(groups=("/mfa-required",) if mfa_required else ())
@@ -65,7 +66,13 @@ class Stack:
         return user
 
     def browser(self) -> Browser:
-        return Browser(self.http, self.bff_replicas)
+        # A distinct synthetic client IP per browser (keycloak.py's own
+        # Browser docstring has the "why"): this whole file drives far
+        # more logins from one real IP than the BFF's own auth rate limit
+        # (LLD-09 §7.2, 20/min) allows for a single real user.
+        ip = f"10.0.{self._next_browser_ip // 256}.{self._next_browser_ip % 256}"
+        self._next_browser_ip += 1
+        return Browser(self.http, self.bff_replicas, client_ip=ip)
 
 
 def _bff_env(idp: KeycloakIdP) -> dict[str, str]:

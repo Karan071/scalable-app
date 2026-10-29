@@ -17,6 +17,14 @@ dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
   "httpx>=0.27",
+  # Real-browser system tests (LLD-14 §10, LLD-15 §10): tests/system/
+  # test_checkout_browser.py, driven directly via playwright.async_api
+  # (not the pytest-playwright plugin's sync fixtures, which would mean
+  # a second, unrelated event loop alongside the rest of tests/system's
+  # pytest-asyncio one). Everything else in tests/system drives the real
+  # Keycloak login at the HTTP layer (keycloak.py's own Browser) -- this
+  # is the one suite that needs an actual rendered page.
+  "playwright>=1.47",
 ]
 
 [tool.ruff]

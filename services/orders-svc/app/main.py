@@ -16,7 +16,10 @@ from sf_authz import (
     install_token_validator,
 )
 from sf_common import (
+    Bulkhead,
+    CircuitBreaker,
     CorrelationIdMiddleware,
+    RetryBudget,
     build_health_router,
     configure_logging,
     init_telemetry,
@@ -96,18 +99,54 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client_id=settings.svc_orders_client_id,
         client_secret=settings.svc_orders_client_secret,
     )
+    # LLD-13 §2.3-§2.4: one breaker/bulkhead per dependency; "slow" is 80%
+    # of this client's own 5s total timeout. The LLD names only payments
+    # (50) and inventory (100) explicitly -- cart/catalog get the same
+    # 100 as inventory, a reasonable default for a dependency not named.
+    bulkheads = {
+        "cart-svc": Bulkhead(100),
+        "catalog-svc": Bulkhead(100),
+        "inventory-svc": Bulkhead(100),
+        "payments-svc": Bulkhead(50),
+    }
+    breakers = {
+        dependency: CircuitBreaker(
+            service="orders-svc", dependency=dependency, slow_call_duration_s=4.0
+        )
+        for dependency in bulkheads
+    }
+    quote_retry_budget = RetryBudget()
+    snapshot_retry_budget = RetryBudget()
     participants = service.Participants(
         cart=CartClient(
-            http_client, base_url=settings.cart_svc_base_url, token_source=token_source
+            http_client,
+            base_url=settings.cart_svc_base_url,
+            token_source=token_source,
+            bulkhead=bulkheads["cart-svc"],
+            circuit_breaker=breakers["cart-svc"],
+            retry_budget=snapshot_retry_budget,
         ),
         catalog=CatalogClient(
-            http_client, base_url=settings.catalog_svc_base_url, token_source=token_source
+            http_client,
+            base_url=settings.catalog_svc_base_url,
+            token_source=token_source,
+            bulkhead=bulkheads["catalog-svc"],
+            circuit_breaker=breakers["catalog-svc"],
+            retry_budget=quote_retry_budget,
         ),
         inventory=InventoryClient(
-            http_client, base_url=settings.inventory_svc_base_url, token_source=token_source
+            http_client,
+            base_url=settings.inventory_svc_base_url,
+            token_source=token_source,
+            bulkhead=bulkheads["inventory-svc"],
+            circuit_breaker=breakers["inventory-svc"],
         ),
         payments=PaymentsClient(
-            http_client, base_url=settings.payments_svc_base_url, token_source=token_source
+            http_client,
+            base_url=settings.payments_svc_base_url,
+            token_source=token_source,
+            bulkhead=bulkheads["payments-svc"],
+            circuit_breaker=breakers["payments-svc"],
         ),
     )
     app.state.participants = participants

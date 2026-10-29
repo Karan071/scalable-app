@@ -1,8 +1,7 @@
 """BFF auth routes (LLD-01 §4, §7, §8, §9, §10).
 
 Scoped to the login/session/logout/step-up critical path. Deferred (open
-items, tracked against LLD-01): back-channel logout (§8, IdP-initiated) and
-rate limiting (LLD-09 §7).
+items, tracked against LLD-01): back-channel logout (§8, IdP-initiated).
 """
 
 import asyncio
@@ -18,7 +17,8 @@ from starlette.responses import RedirectResponse
 from . import pending_login, proxy
 from .csrf import derive_csrf_token, verify_csrf_token
 from .oidc import IdTokenInvalid, generate_pkce
-from .request_context import check_origin, cookie_names, require_session
+from .ratelimit import AUTH, enforce
+from .request_context import check_origin, client_ip, cookie_names, require_session
 from .request_context import state as app_state
 
 router = APIRouter(prefix="/auth")
@@ -35,6 +35,7 @@ def _validate_return_to(return_to: str, allowed_prefixes: list[str]) -> str:
 
 async def _start_login(request: Request, *, return_to: str, step_up: bool) -> Response:
     s = app_state(request)
+    await enforce(s.rate_limiter, AUTH, f"ip:{client_ip(request)}")
     return_to = _validate_return_to(return_to, s.settings.return_to_allowed_prefixes)
 
     oidc_state = secrets.token_urlsafe(32)
@@ -99,6 +100,7 @@ async def callback(
     error: str | None = None,
 ) -> Response:
     s = app_state(request)
+    await enforce(s.rate_limiter, AUTH, f"ip:{client_ip(request)}")
     if error or not code or not state:
         return RedirectResponse("/auth/error?code=idp_error", status_code=302)
 

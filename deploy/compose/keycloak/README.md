@@ -35,11 +35,17 @@ JSON instead of inside it (confirmed against a running Keycloak 26.0,
   verification in the Keycloak admin console first.
 - WebAuthn (open item, Product) and `private_key_jwt` for staging (open item,
   Security) are deferred per LLD-01 §17.
-- **`e2e-test-user`** and `sf-bff`'s extra `http://localhost:8020/*` redirect
-  URI/origin are test fixtures for driving the real login flow headlessly
-  (LLD-01 §16), not part of the production realm design. Real users are
-  always JIT-provisioned on first login (LLD-01 §11.2) — this is the one
-  seeded exception, needed because nothing can log in through a UI here.
+- **`e2e-test-user`** and `sf-bff`'s extra `http://localhost:8020/*` and
+  `http://localhost:18180/*` redirect URIs/origins are test fixtures for
+  driving the real login flow (LLD-01 §16, LLD-14 §10), not part of the
+  production realm design. 8020 is used by `tests/system/test_bff_login.py`
+  (a scripted HTTP client, so the actual listening port doesn't have to
+  match — see that file's own `keycloak.py` helper); 18180 is used by
+  `tests/system/test_checkout_browser.py`, which drives a real browser that
+  really navigates to whatever `redirect_uri` it was sent, so that one
+  *does* have to be a free port a real BFF process can bind to. Real users
+  are always JIT-provisioned on first login (LLD-01 §11.2) — this is the
+  one seeded exception, needed because nothing can log in through a UI here.
 - **`components` declares `sf_uid` in the realm's User Profile.** Keycloak
   26's declarative User Profile silently drops any attribute write for a
   name it doesn't recognize — `users-svc`'s admin-API call to set `sf_uid`

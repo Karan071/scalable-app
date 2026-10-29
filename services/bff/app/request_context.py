@@ -28,6 +28,21 @@ def check_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="origin mismatch")
 
 
+def client_ip(request: Request, *, trusted_hops: int = 1) -> str:
+    """LLD-09 §7.2: "taken from X-Forwarded-For only at the configured
+    trusted hop count" -- never from the header's first entry, which any
+    client can set to anything. ``trusted_hops`` is the number of proxies
+    between the client and this process that each append their own view
+    of the previous hop (1: the gateway) -- the real client is the entry
+    that many positions from the end."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+        if len(hops) >= trusted_hops:
+            return hops[-trusted_hops]
+    return request.client.host if request.client else "unknown"
+
+
 async def require_session(request: Request) -> tuple[str, SessionRecord]:
     s = state(request)
     session_cookie, _ = cookie_names(request)

@@ -320,11 +320,13 @@
       "serviceAccountsEnabled": false,
       "redirectUris": [
         "https://app.scaleforge.localhost/auth/callback",
-        "http://localhost:8020/auth/callback"
+        "http://localhost:8020/auth/callback",
+        "http://localhost:18180/auth/callback"
       ],
       "webOrigins": [
         "https://app.scaleforge.localhost",
-        "http://localhost:8020"
+        "http://localhost:8020",
+        "http://localhost:18180"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",

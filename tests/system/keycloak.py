@@ -171,12 +171,22 @@ class Browser:
     ``bff_responses`` keeps every response the BFF sent this browser.
     """
 
-    def __init__(self, http: httpx.AsyncClient, replicas: list[str]) -> None:
+    def __init__(
+        self, http: httpx.AsyncClient, replicas: list[str], *, client_ip: str | None = None
+    ) -> None:
         self._http = http
         self._replicas = replicas
         self._next_replica = 0
         self._jars: dict[str, dict[str, str]] = {}
         self.bff_responses: list[httpx.Response] = []
+        # Every Browser otherwise shares one real source IP (127.0.0.1, the
+        # test process itself), landing every browser in this suite in the
+        # BFF's own "auth" rate-limit bucket together (LLD-09 §7.2, keyed by
+        # IP) -- a real multi-user deployment never sees this many logins
+        # from one IP, but this harness's whole point is driving many in a
+        # row. A distinct synthetic IP per ``Browser`` is a closer
+        # simulation of distinct real users, not just a workaround.
+        self._client_ip = client_ip
 
     def cookies(self, url: str) -> dict[str, str]:
         return self._jars.setdefault(urlsplit(url).hostname or "", {})
@@ -186,6 +196,8 @@ class Browser:
         headers = dict(kwargs.pop("headers", None) or {})  # type: ignore[call-overload]
         if jar:
             headers["cookie"] = "; ".join(f"{k}={v}" for k, v in jar.items())
+        if self._client_ip is not None:
+            headers["x-forwarded-for"] = self._client_ip
         resp = await self._http.request(method, url, headers=headers, **kwargs)  # type: ignore[arg-type]
         for set_cookie in resp.headers.get_list("set-cookie"):
             name, _, rest = set_cookie.partition("=")

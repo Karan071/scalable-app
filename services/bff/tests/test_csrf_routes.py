@@ -59,6 +59,16 @@ class FakeSessions:
         return 0
 
 
+class AlwaysAllowRateLimiter:
+    """``app.state.rate_limiter`` fake for any route that calls
+    ``ratelimit.enforce`` -- every one of this suite's own tests is about
+    something else (CSRF, step-up, ...), not rate limiting itself (that's
+    ``test_ratelimit.py``'s job)."""
+
+    async def check(self, _rate_class: object, _key: str, *, cost: int = 1) -> SimpleNamespace:
+        return SimpleNamespace(allowed=True, remaining=999, retry_after_s=-1.0, reset_after_s=0.0)
+
+
 class FakeOidc:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -82,6 +92,7 @@ def _client(record: SessionRecord | None) -> TestClient:
     real_app.state.sessions = FakeSessions(record)
     real_app.state.oidc = FakeOidc()
     real_app.state.api_proxy_gate = ConcurrencyGate(max_concurrency=100)
+    real_app.state.rate_limiter = AlwaysAllowRateLimiter()
     real_app.state.http_client = httpx.AsyncClient()
     client = TestClient(real_app, base_url="https://app.test", raise_server_exceptions=False)
     client.cookies.set("__Host-sf_session", _SESSION_ID)

@@ -31,6 +31,8 @@ from sf_common import get_correlation_id
 from starlette.datastructures import State
 
 from .csrf import verify_csrf_token
+from .ratelimit import classify as classify_rate_limit
+from .ratelimit import enforce as enforce_rate_limit
 from .request_context import check_origin, require_session
 from .request_context import state as app_state
 from .sessions import SessionRecord, key_hash
@@ -44,6 +46,13 @@ _LOCK_MIN_VALID_S = 5
 _LOCK_POLL_INTERVAL_S = 0.1
 _LOCK_POLL_TIMEOUT_S = 1.5
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Allow-listed request headers the SPA sets that a downstream route
+# actually requires (LLD-06 §4's `Idempotency-Key`; `If-Match`/`If-None-
+# Match` for every optimistic-locking route this proxy fronts — catalog/
+# inventory/orders/authz's own `version`-based routes, apps/web/src/lib/
+# api/*.ts). Everything else the client sends is dropped, same as before:
+# this isn't a transparent proxy, `forward()` builds its own header set.
+_FORWARDED_REQUEST_HEADERS = {"idempotency-key", "if-match", "if-none-match"}
 _HOP_BY_HOP_RESPONSE_HEADERS = {
     "connection",
     "keep-alive",
@@ -205,6 +214,10 @@ async def forward(
     traceparent = request.headers.get("traceparent")
     if traceparent:
         headers["traceparent"] = traceparent
+    for name in _FORWARDED_REQUEST_HEADERS:
+        value = request.headers.get(name)
+        if value is not None:
+            headers[name] = value
 
     http_client: httpx.AsyncClient = s.http_client
     resp = await http_client.request(
@@ -271,6 +284,11 @@ async def proxy_request(service: str, downstream_path: str, request: Request) ->
 
     try:
         session_id, record = await require_session(request)
+        await enforce_rate_limit(
+            s.rate_limiter,
+            classify_rate_limit(service, downstream_path, request.method),
+            f"user:{record.uid}",
+        )
 
         json_body: object = None
         if request.method in _UNSAFE_METHODS:

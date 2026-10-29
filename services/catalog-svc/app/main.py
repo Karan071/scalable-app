@@ -15,6 +15,7 @@ from sf_authz import (
     install_token_validator,
 )
 from sf_common import (
+    CacheClient,
     CorrelationIdMiddleware,
     build_health_router,
     configure_logging,
@@ -84,6 +85,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis = Redis.from_url(settings.redis_cache_url, decode_responses=True)
     watcher = PolicyWatcher(enforcer=enforcer, redis_client=redis)
     await watcher.start()
+    # LLD-09 §6.1: product detail (storefront), 300s TTL. Same redis-cache
+    # connection the policy watcher already holds -- a different key
+    # namespace (`cat:v1:prod:*` vs. the watcher's own pub/sub channel),
+    # so there's no collision in sharing it.
+    app.state.product_cache = CacheClient(redis, name="catalog_product", load_concurrency=20)
 
     relay = OutboxRelay(
         service_name="catalog-svc",

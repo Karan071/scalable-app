@@ -20,6 +20,8 @@ This LLD covers:
 
 ## 2. Resilience parameters (`sf-common`)
 
+**As built (2026-10-29, E4.6, in progress).** §2.2-§2.4 (retries, circuit breakers, bulkheads) are built in `sf_common` as specified and unit-tested (51 tests); §2.1's deadline math is built too, but nothing mints or reads `X-Request-Deadline` yet (the BFF doesn't set it; no client checks it). Wired into one real caller so far: orders-svc's own clients (`services/orders-svc/app/clients.py`) — the dependency this section names concrete bulkhead numbers for. Every other service's outbound calls, and the BFF's own `/api/**` proxy, don't use any of this yet. Full detail in `docs/00-delivery-plan.md`'s E4.6 note.
+
 ### 2.1 Timeouts
 
 The budgets are in HLD §9.1. Every client sets connect (≤ 500 ms) and total timeouts. The BFF sets `X-Request-Deadline` (an epoch-ms absolute deadline). Each hop computes `remaining = deadline − now − 50 ms safety`. If `remaining` is less than the hop's minimum, it fails fast with 503 `deadline-exceeded` instead of making the call.
