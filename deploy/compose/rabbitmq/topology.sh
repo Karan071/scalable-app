@@ -36,6 +36,24 @@ queue_with_dlq() { # queue_with_dlq NAME
   api PUT "/queues/$V/$1" "{\"durable\":true,\"arguments\":{\"x-queue-type\":\"quorum\",\"x-delivery-limit\":10,\"x-dead-letter-exchange\":\"\",\"x-dead-letter-routing-key\":\"$1.dlq\"}}"
 }
 
+# queue_with_dlq plus four dedicated retry-tier queues (LLD-08 §7, E4.5:
+# sf_messaging.retry). Dedicated to NAME, not shared across consumers: a
+# retry queue's own x-dead-letter-routing-key is a fixed queue argument,
+# so it can only ever point back to one original queue -- a message
+# lands here via the default exchange (routing_key = "NAME.retry.<tier>",
+# sf_messaging.retry.queue_name_for_tier), sits for the tier's own TTL,
+# then RabbitMQ's own dead-letter mechanism redelivers it straight back
+# to NAME with no consumer-side timer. Opt-in per queue
+# (InboxConsumer(..., enable_retry_tiers=True)): every queue still using
+# plain queue_with_dlq above is completely unaffected.
+queue_with_dlq_and_retries() { # queue_with_dlq_and_retries NAME
+  queue_with_dlq "$1"
+  api PUT "/queues/$V/$1.retry.1" "{\"durable\":true,\"arguments\":{\"x-queue-type\":\"quorum\",\"x-message-ttl\":5000,\"x-dead-letter-exchange\":\"\",\"x-dead-letter-routing-key\":\"$1\"}}"
+  api PUT "/queues/$V/$1.retry.2" "{\"durable\":true,\"arguments\":{\"x-queue-type\":\"quorum\",\"x-message-ttl\":30000,\"x-dead-letter-exchange\":\"\",\"x-dead-letter-routing-key\":\"$1\"}}"
+  api PUT "/queues/$V/$1.retry.3" "{\"durable\":true,\"arguments\":{\"x-queue-type\":\"quorum\",\"x-message-ttl\":120000,\"x-dead-letter-exchange\":\"\",\"x-dead-letter-routing-key\":\"$1\"}}"
+  api PUT "/queues/$V/$1.retry.4" "{\"durable\":true,\"arguments\":{\"x-queue-type\":\"quorum\",\"x-message-ttl\":600000,\"x-dead-letter-exchange\":\"\",\"x-dead-letter-routing-key\":\"$1\"}}"
+}
+
 bind() { # bind EXCHANGE QUEUE ROUTING_KEY
   api POST "/bindings/$V/e/$1/q/$2" "{\"routing_key\":\"$3\"}"
 }
@@ -61,6 +79,14 @@ bind sf.events q.audit.ingest audit.recorded.v1
 # q.bff.identity (E2.12): the BFF revokes a disabled user's sessions (LLD-01 §8).
 queue_with_dlq q.bff.identity
 bind sf.events q.bff.identity user.disabled.v1
+
+# q.bff.sse (E4.7, LLD-06 §10): any BFF replica fans order.status_changed
+# out to redis-cache pub/sub, keyed by customer_id, for whichever replica
+# holds that user's open SSE stream. notification.in_app.v1 (the LLD's
+# other fan-out source) isn't bound yet -- notifications-svc, its only
+# producer, doesn't exist.
+queue_with_dlq q.bff.sse
+bind sf.events q.bff.sse order.status_changed.v1
 
 # q.orgs.users (E2.8, LLD-08 §2.1): orgs-svc disables a disabled user's
 # memberships in every org.
@@ -93,8 +119,12 @@ bind sf.events q.search.catalog product.updated.v1
 bind sf.events q.search.catalog product.deleted.v1
 
 # q.inventory.catalog (E3.4, LLD-07 §3): inventory-svc creates a zero-stock
-# row for every new SKU off catalog-svc's product lifecycle.
-queue_with_dlq q.inventory.catalog
+# row for every new SKU off catalog-svc's product lifecycle. Retry tiers
+# (E4.5): a concurrent zero-stock-row insert can deadlock under load same
+# as any other multi-writer insert this service already retries at the DB
+# layer (sf_db.retry_on_transient) -- this is the same class of failure,
+# just past that local retry budget, LLD-08 §7's own "transient" row.
+queue_with_dlq_and_retries q.inventory.catalog
 bind sf.events q.inventory.catalog product.updated.v1
 
 # q.inventory.commands (E3.4, LLD-07 §4.2-§4.4): the async alternative to

@@ -2264,6 +2264,7 @@ source = { editable = "libs/py/sf-messaging" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "httpx" },
     { name = "opentelemetry-api" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
@@ -2272,6 +2273,7 @@ dependencies = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.4,<10" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "opentelemetry-api", specifier = ">=1.45" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
 ]

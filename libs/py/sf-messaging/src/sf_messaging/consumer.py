@@ -5,10 +5,15 @@ the consumer's own ``inbox`` table, then dispatch to a handler keyed by the
 envelope's ``type`` — all inside one transaction. A missing handler for a
 type is a no-op (not an error): a queue bound on a wildcard routing key
 (e.g. ``organization.*.v1``) will receive types this consumer doesn't act
-on. Any handler exception nacks the message without requeue — LLD-08 §7's
-retry tiers and DLQ tooling are a separate, later epic (E4.5); for now a
-failing message goes straight to whatever the queue is configured to
-dead-letter into.
+on. A handler exception nacks the message without requeue, straight to
+whatever the queue is configured to dead-letter into -- unless
+``enable_retry_tiers=True`` (LLD-08 §7, E4.5), in which case ``retry.py``'s
+own classification/routing decides between a retry tier and the DLQ
+instead. Off by default: every consumer across the workspace built before
+E4.5 keeps this exact nack behavior unless it opts in, and its own queue
+needs the dedicated ``<queue>.retry.1``..``.retry.4`` queues
+(``deploy/compose/rabbitmq/topology.sh``'s ``queue_with_dlq_and_retries``)
+to exist before it's turned on.
 """
 
 import asyncio
@@ -26,6 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import metrics as _metrics
+from . import retry as _retry
 
 logger = logging.getLogger("sf_messaging.consumer")
 _tracer = trace.get_tracer(__name__)
@@ -60,6 +66,7 @@ class InboxConsumer:
         handler_concurrency: int = DEFAULT_HANDLER_CONCURRENCY,
         inbox_table: str = "inbox",
         on_handled: OnHandledFn | None = None,
+        enable_retry_tiers: bool = False,
     ) -> None:
         if not _VALID_IDENTIFIER.match(inbox_table):
             raise ValueError(f"not a safe table name: {inbox_table!r}")
@@ -72,6 +79,7 @@ class InboxConsumer:
         self._prefetch = prefetch
         self._slots = asyncio.Semaphore(handler_concurrency)
         self._on_handled = on_handled
+        self._enable_retry_tiers = enable_retry_tiers
 
         self._insert_inbox_sql = text(
             f"INSERT INTO {inbox_table} (consumer, message_id) VALUES (:consumer, :message_id) "
@@ -153,15 +161,26 @@ class InboxConsumer:
                 )
             elif self._on_handled is not None and handled_value is not None:
                 await self._on_handled(handled_value)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "handler failed for type=%s message_id=%s consumer=%s",
                 event_type,
                 message_id,
                 self._consumer_name,
             )
-            await message.nack(requeue=False)
-            self._record(event_type, "dead_lettered", started)
+            if self._enable_retry_tiers:
+                assert self._channel is not None
+                route_result = await _retry.route_failure(
+                    self._channel,
+                    queue_name=self._queue_name,
+                    message=message,
+                    consumer_name=self._consumer_name,
+                    exc=exc,
+                )
+                self._record(event_type, route_result, started)
+            else:
+                await message.nack(requeue=False)
+                self._record(event_type, "dead_lettered", started)
 
     def _record(self, event_type: str, result: str, started: float) -> None:
         labels = {"consumer": self._consumer_name, "type": event_type}

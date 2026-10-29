@@ -8,6 +8,10 @@ dependencies = [
   "aio-pika>=9.4,<10",
   "asyncpg>=0.29",
   "opentelemetry-api>=1.45",
+  # Recognizing a transient outbound-call failure (retry.py, LLD-08 §7) --
+  # every consumer handler in this codebase already uses httpx for its own
+  # outbound calls, so this isn't a new dependency class for the workspace.
+  "httpx>=0.27",
 ]
 
 [build-system]

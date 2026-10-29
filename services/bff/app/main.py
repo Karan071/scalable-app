@@ -27,6 +27,8 @@ from .routes_auth import router as auth_router
 from .sessions import SessionStore
 from .settings import Settings
 from .spa import build_spa_router
+from .sse import MAX_STREAMS_PER_USER, PerUserStreamLimiter, SseFanoutConsumer
+from .sse import router as sse_router
 from .users_client import ServiceTokenSource, UsersClient
 
 settings = Settings()
@@ -79,6 +81,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.rate_limiter = RateLimiter(
         redis_cache, replica_count=settings.rate_limit_replica_count
     )
+    app.state.redis_cache = redis_cache
+    app.state.sse_stream_limiter = PerUserStreamLimiter(MAX_STREAMS_PER_USER)
 
     identity_consumer = IdentityEventConsumer(
         redis=redis,
@@ -89,8 +93,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await identity_consumer.start()
     app.state.identity_consumer = identity_consumer
 
+    sse_consumer = SseFanoutConsumer(
+        redis=redis_cache, amqp_url=_amqp_url(settings), queue_name="q.bff.sse"
+    )
+    await sse_consumer.start()
+    app.state.sse_consumer = sse_consumer
+
     yield
 
+    await sse_consumer.stop()
     await identity_consumer.stop()
     await http_client.aclose()
     await redis.aclose()
@@ -112,11 +123,25 @@ async def _identity_consumer_ready() -> bool:
         return False
 
 
+async def _sse_consumer_ready() -> bool:
+    try:
+        return app.state.sse_consumer.is_running
+    except Exception:
+        return False
+
+
 app = FastAPI(title=settings.service_name, lifespan=lifespan)
 app.add_middleware(CorrelationIdMiddleware)
 install_problem_details(app)
-app.include_router(build_health_router(readiness_checks=[_redis_ready, _identity_consumer_ready]))
+app.include_router(
+    build_health_router(
+        readiness_checks=[_redis_ready, _identity_consumer_ready, _sse_consumer_ready]
+    )
+)
 app.include_router(auth_router)
+# Registered before api_router: /api/events must match this router's own
+# route, not fall through to the generic /api/{service}/{path:path} proxy.
+app.include_router(sse_router)
 app.include_router(api_router)
 if settings.web_dist_dir is not None:
     dist_dir = Path(settings.web_dist_dir)

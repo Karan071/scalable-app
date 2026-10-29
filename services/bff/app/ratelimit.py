@@ -218,8 +218,10 @@ def classify(service: str, downstream_path: str, method: str) -> RateLimitClass:
     exports, reindex triggers) aren't pattern-matched specifically yet."""
     if service == "search":
         return SEARCH
-    if service == "orders" and method == "POST" and (
-        downstream_path.endswith("checkouts") or downstream_path.endswith(":cancel")
+    if (
+        service == "orders"
+        and method == "POST"
+        and (downstream_path.endswith("checkouts") or downstream_path.endswith(":cancel"))
     ):
         return CHECKOUT
     if method == "GET":

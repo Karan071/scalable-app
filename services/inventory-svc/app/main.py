@@ -108,6 +108,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         amqp_url=_amqp_url(settings),
         queue_name="q.inventory.catalog",
         handlers=event_handlers.CATALOG_DISPATCH,
+        # LLD-08 §7 retry tiers (E4.5): a concurrent zero-stock-row insert
+        # can deadlock under load, same class of failure sf_db's own
+        # retry_on_transient already retries locally, just past that
+        # budget. Needs q.inventory.catalog.retry.1-4 to exist
+        # (deploy/compose/rabbitmq/topology.sh's queue_with_dlq_and_retries).
+        enable_retry_tiers=True,
     )
     await catalog_consumer.start()
     app.state.catalog_consumer = catalog_consumer
