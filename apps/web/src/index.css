@@ -2,11 +2,39 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+
+/* Galgo Condensed (Giulia Boggio, SIL Open Font License) -- self-hosted
+   display face, used sparingly for headlines where the UI should pop. Not
+   a body or UI font: it's a condensed display face, so it only goes on
+   font-heading, never on paragraph text or form controls. */
+@font-face {
+    font-family: 'Galgo Condensed';
+    src: url('./assets/fonts/galgo/Galgo-Light.otf') format('opentype');
+    font-weight: 300;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Galgo Condensed';
+    src: url('./assets/fonts/galgo/Galgo-Regular.otf') format('opentype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Galgo Condensed';
+    src: url('./assets/fonts/galgo/Galgo-Bold.otf') format('opentype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
+    --font-heading: 'Galgo Condensed', 'Geist Variable', sans-serif;
+    --font-body: 'Inter Variable', sans-serif;
     --font-sans: 'Geist Variable', sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);

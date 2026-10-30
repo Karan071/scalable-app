@@ -1,0 +1,135 @@
+/* Ties the Anatomy kit's own light theme into this page's ivory / emerald
+ * / vermilion palette (SignInPrompt.tsx's own `theme` object has the hex
+ * values) instead of its generic neutral grey. */
+.sg-panel.iso[data-theme='light'] {
+  --anatomy-page: transparent;
+  --anatomy-card: transparent;
+  --anatomy-paper: #fbf4e6;
+  --anatomy-face: #ffffff;
+  --anatomy-top: #ffffff;
+  --anatomy-shade-0: #e4d6b4;
+  --anatomy-shade-1: #ecdfc2;
+  --anatomy-shade-2: #f3e9d4;
+  --anatomy-shade-3: #f9f1e1;
+  --anatomy-hi: #2a2420;
+  --anatomy-mid: #6b6256;
+  --anatomy-lo: #a99b7e;
+  --anatomy-faint: #d8c9a3;
+  --anatomy-lit: #1f6d4c;
+  --anatomy-lit-top: #2a8560;
+  --anatomy-lit-shade: #1f6d4c;
+  --anatomy-strong: #2a2420;
+  --anatomy-text: #6b6256;
+  --anatomy-muted: #8c8270;
+  --anatomy-dot: #6b6256;
+  --anatomy-halo: #d8471f;
+  --anatomy-halo-opacity: 0.1;
+}
+
+/* This page runs one text face throughout (Inter, via --font-body) and
+ * the house style here bans monospace/uppercase-tracked micro-labels
+ * outside real code -- override the kit's own instrument-panel tokens
+ * (mono corner labels, muted-on-muted legend) so this figure reads as
+ * part of the same page, not a separate technical system. The frame
+ * layout (fig/title/hint/readout corners) stays; only the type and
+ * contrast change. */
+.sg-panel.iso[data-theme='light'] {
+  --anatomy-mono: var(--font-body), 'Inter Variable', sans-serif;
+}
+.sg-panel .iso-plate-corner {
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.sg-panel .iso-plate-corner[data-corner='title'],
+.sg-panel .iso-plate-corner[data-corner='hint'] {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.sg-panel .iso-plate-corner[data-corner='fig'],
+.sg-panel .iso-plate-corner[data-corner='readout'] {
+  color: #2a2420;
+  font-weight: 600;
+}
+.sg-panel .iso-plate-corner[data-corner='title'],
+.sg-panel .iso-plate-corner[data-corner='hint'] {
+  color: #5a5042;
+}
+.sg-panel .iso-legend {
+  font-family: var(--font-body);
+}
+.sg-panel .iso-caption {
+  color: #2a2420;
+}
+.sg-panel .iso-key {
+  color: #4a4336;
+}
+
+/* The kit's own plate padding (iso.css) only shrinks past a *viewport*
+ * width of 560px -- but this figure always lives inside a constrained
+ * side panel (SignInPrompt.tsx), which can be much narrower than that
+ * even on a wide viewport (44% of 768px, minus the panel's own padding,
+ * is well under 300px). Fit the panel it's actually in, not the
+ * viewport. */
+.sg-panel .iso-plate {
+  box-shadow: none; /* taste-skill-ignore: removing the kit's default shadow, not adding one */
+  background: transparent;
+  padding: 28px 14px 44px;
+}
+
+.sg-panel .iso-figure {
+  margin: 0;
+}
+
+.sg-panel .iso-svg {
+  max-width: 100%;
+}
+
+/* The corner labels are absolutely positioned, nowrap text (iso.css) --
+ * fine at the kit's own default card width, but "hint" and "readout"
+ * share the bottom row and can collide in a panel this narrow. Keep
+ * both short (see the component's own `hint`/`readout` strings) and
+ * still cap their width here as a hard backstop. */
+.sg-panel .iso-plate-corner[data-corner='hint'] {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sg-panel .iso-plate-corner[data-corner='readout'] {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Reserve/commit transitions -- transform is CSS-animatable on an SVG
+ * group, so a plain state swap in React already reads as motion. */
+.sg-move {
+  transition: transform 550ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sg-lamp--reserved .iso-fill,
+.sg-lamp--reserved .iso-top {
+  fill: #d8471f;
+}
+.sg-lamp--reserved .iso-shade {
+  fill: #b53a19;
+}
+.sg-lamp--reserved .iso-edge {
+  stroke: #d8471f;
+}
+
+.sg-lamp--committed .iso-fill,
+.sg-lamp--committed .iso-top {
+  fill: #1f6d4c;
+}
+.sg-lamp--committed .iso-shade {
+  fill: #164e37;
+}
+.sg-lamp--committed .iso-edge {
+  stroke: #1f6d4c;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-move {
+    transition: none;
+  }
+}

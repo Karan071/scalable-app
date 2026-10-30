@@ -10,3 +10,5 @@ __pycache__/
 claude-chat-memories
 # Local-only artifacts (e.g. `make dev-db-reset` backups)
 .local/
+.taste-skill/inspect
+.claude/skills/diagram-design

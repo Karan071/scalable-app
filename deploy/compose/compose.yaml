@@ -89,6 +89,14 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${POSTGRES_APP_PASSWORD}
+      # ScaleForge login theme (./keycloak/themes/scaleforge): disable
+      # theme caching in dev so CSS edits show on the next request, no
+      # restart needed.
+      KC_SPI_THEME_STATIC_MAX_AGE: "-1"
+      KC_SPI_THEME_CACHE_THEMES: "false"
+      KC_SPI_THEME_CACHE_TEMPLATES: "false"
+    volumes:
+      - ./keycloak/themes/scaleforge:/opt/keycloak/themes/scaleforge
     ports:
       - "8081:8080" # app port; avoids clashing with a local port 8080
       - "9000:9000" # management/health port

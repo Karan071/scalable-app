@@ -1,5 +1,7 @@
 {
   "realm": "scaleforge",
+  "displayName": "ScaleForge",
+  "loginTheme": "scaleforge",
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": true,

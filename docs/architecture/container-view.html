@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScaleForge · Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1240px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    .diagram-wrap { overflow-x: auto; }
+    svg { width: 100%; min-width: 1160px; display: block; }
+
+    .order-flow {
+      margin-top: 5rem;
+      padding: clamp(1.5rem, 5vw, 4rem);
+      background: #ebe9e5;
+      color: var(--color-ink);
+    }
+
+    .order-flow h2 {
+      max-width: 14ch;
+      margin-bottom: 2rem;
+      font-family: var(--font-serif);
+      font-size: clamp(2rem, 4vw, 3.25rem);
+      font-weight: 400;
+      letter-spacing: -0.025em;
+      line-height: 1;
+    }
+
+    .flow-step {
+      border-top: 1px solid rgba(45, 49, 66, 0.18);
+    }
+
+    .flow-step:last-child { border-bottom: 1px solid rgba(45, 49, 66, 0.18); }
+
+    .flow-step h3 { margin: 0; }
+
+    .flow-trigger {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      padding: 1.35rem 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      text-align: left;
+      font: 500 clamp(1.1rem, 2.2vw, 1.5rem) / 1.25 var(--font-sans);
+    }
+
+    .flow-trigger:hover { color: var(--color-accent); }
+    .flow-trigger:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 5px; }
+
+    .morphicon {
+      flex: 0 0 1.5rem;
+      width: 1.5rem;
+      height: 1.5rem;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-width: 1.6;
+      transition: transform 240ms cubic-bezier(0.2, 0.75, 0.25, 1);
+    }
+
+    .morphicon__vertical {
+      transform-box: fill-box;
+      transform-origin: center;
+      transition: transform 240ms cubic-bezier(0.2, 0.75, 0.25, 1), opacity 180ms ease;
+    }
+
+    .flow-trigger[aria-expanded="true"] .morphicon { transform: rotate(90deg); }
+    .flow-trigger[aria-expanded="true"] .morphicon__vertical { transform: scaleY(0.1); opacity: 0; }
+
+    .flow-panel {
+      display: grid;
+      grid-template-rows: 1fr;
+      opacity: 1;
+    }
+
+    .flow-panel__inner {
+      min-height: 0;
+      overflow: hidden;
+      padding: 0 3rem 1.5rem 0;
+      color: var(--color-muted);
+      font-size: 1rem;
+      line-height: 1.65;
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .flow-panel__inner p { max-width: 68ch; }
+    .flow-panel__inner p + p { margin-top: 0.7rem; }
+
+    .order-flow[data-enhanced] .flow-panel {
+      grid-template-rows: 0fr;
+      opacity: 0;
+      transition: grid-template-rows 360ms cubic-bezier(0.2, 0.75, 0.25, 1), opacity 220ms ease;
+    }
+
+    .order-flow[data-enhanced] .flow-panel[data-open="true"] { grid-template-rows: 1fr; opacity: 1; }
+
+    .order-flow[data-enhanced] .flow-panel__inner {
+      transform: translateY(-0.45rem);
+      opacity: 0;
+      transition: transform 280ms ease, opacity 220ms ease;
+    }
+
+    .order-flow[data-enhanced] .flow-panel[data-open="true"] .flow-panel__inner {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    @media (max-width: 600px) {
+      .order-flow { margin-top: 3rem; }
+      .flow-trigger { gap: 1rem; }
+      .flow-panel__inner { padding-right: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .morphicon,
+      .morphicon__vertical,
+      .order-flow[data-enhanced] .flow-panel,
+      .order-flow[data-enhanced] .flow-panel__inner {
+        transition-duration: 0.01ms;
+      }
+
+      .order-flow[data-enhanced] .flow-panel__inner { transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · ScaleForge</p>
+    <h1>ScaleForge platform — container view</h1>
+
+    <div class="diagram-wrap">
+    <svg viewBox="0 0 1160 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="container-view-title container-view-desc">
+      <title id="container-view-title">ScaleForge platform container view</title>
+      <desc id="container-view-desc">Architecture diagram showing the browser, edge gateway, BFF, domain services, data stores, identity provider, and payment provider that make up the ScaleForge platform.</desc>
+      <defs>
+        <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+        </pattern>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/>
+
+      <!-- Zones (drawn before arrows and nodes) -->
+      <rect x="256" y="260" width="176" height="144" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <rect x="306" y="264" width="52" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="332" y="273" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">EDGE</text>
+
+      <rect x="496" y="140" width="188" height="340" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <rect x="546" y="144" width="88" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="590" y="153" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">APPLICATION</text>
+
+      <rect x="776" y="140" width="188" height="336" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <rect x="836" y="144" width="48" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="860" y="153" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">DATA</text>
+
+      <!-- Arrows (behind nodes) -->
+      <!-- 1. Browser -> Gateway -->
+      <line x1="168" y1="332" x2="280" y2="332" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="196" y="312" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="224" y="321" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HTTPS</text>
+
+      <!-- 11. Gateway -> Browser (static assets, dashed) -->
+      <line x1="280" y1="348" x2="168" y2="348" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="196" y="356" width="48" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="220" y="365" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ASSETS</text>
+
+      <!-- 2. Gateway -> BFF -->
+      <path d="M408,332 H582 Q590,332 590,324 V244" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="534" y="278" width="48" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="558" y="287" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ROUTE</text>
+
+      <!-- 3. BFF -> Keycloak -->
+      <line x1="590" y1="180" x2="590" y2="104" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="546" y="136" width="36" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="564" y="145" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">OIDC</text>
+
+      <!-- 4. BFF -> Domain services -->
+      <line x1="606" y1="244" x2="606" y2="380" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="562" y="306" width="36" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="580" y="315" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HTTP</text>
+
+      <!-- 5. BFF -> Redis -->
+      <line x1="660" y1="212" x2="800" y2="212" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="700" y="192" width="60" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="730" y="201" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SESSION</text>
+
+      <!-- 6. Domain services -> PostgreSQL -->
+      <line x1="660" y1="420" x2="800" y2="420" stroke="#4f5d75" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="704" y="400" width="44" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="726" y="409" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WRITE</text>
+
+      <!-- 7. Domain services -> RabbitMQ -->
+      <path d="M660,396 H814 Q822,396 822,388 V344" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="708" y="376" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="736" y="385" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">OUTBOX</text>
+
+      <!-- 8. RabbitMQ -> Domain services (consumed events, dashed) -->
+      <path d="M850,344 V360 Q850,368 842,368 H648 Q640,368 640,376 V380" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="720" y="348" width="52" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="746" y="357" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EVENTS</text>
+
+      <!-- 9. Domain services -> mock-payment-provider -->
+      <line x1="590" y1="460" x2="590" y2="540" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="598" y="492" width="72" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="634" y="501" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">AUTHORIZE</text>
+
+      <!-- 10. mock-payment-provider -> Gateway (webhook, dashed, link) -->
+      <path d="M512,572 H352 Q344,572 344,564 V364" fill="none" stroke="#2e5aa8" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-link)"/>
+      <rect x="400" y="552" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="428" y="561" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WEBHOOK</text>
+
+      <!-- Node: Browser (input) -->
+      <rect x="40" y="300" width="128" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="40" y="300" width="128" height="64" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+      <rect x="48" y="308" width="32" height="12" rx="2" fill="transparent" stroke="rgba(90,101,128,0.40)" stroke-width="0.8"/>
+      <text x="64" y="317" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WEB</text>
+      <text x="104" y="336" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Browser</text>
+      <text x="104" y="352" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">React · TS · Vite SPA</text>
+
+      <!-- Node: Keycloak (external) -->
+      <rect x="520" y="40" width="140" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="520" y="40" width="140" height="64" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="528" y="48" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.22)" stroke-width="0.8"/>
+      <text x="542" y="57" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">IDP</text>
+      <text x="590" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Keycloak</text>
+      <text x="590" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">separate trust domain</text>
+
+      <!-- Node: Gateway (backend, in Edge zone) -->
+      <rect x="280" y="300" width="128" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="280" y="300" width="128" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="288" y="308" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="304" y="317" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EDGE</text>
+      <text x="344" y="336" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Envoy Gateway</text>
+      <text x="344" y="352" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">TLS · routing · limits</text>
+
+      <!-- Node: BFF (focal) -->
+      <rect x="520" y="180" width="140" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="520" y="180" width="140" height="64" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+      <rect x="528" y="188" width="30" height="12" rx="2" fill="transparent" stroke="rgba(191,69,32,0.50)" stroke-width="0.8"/>
+      <text x="543" y="197" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BFF</text>
+      <text x="645" y="240" fill="rgba(191,69,32,0.10)" font-size="28" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="end">01</text>
+      <text x="590" y="216" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">bff</text>
+      <text x="590" y="232" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">OIDC · sessions · SSE</text>
+
+      <!-- Node: Domain services (backend, in Application zone) -->
+      <rect x="520" y="380" width="140" height="80" rx="6" fill="#f5f5f5"/>
+      <rect x="520" y="380" width="140" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="528" y="388" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="542" y="397" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SVC</text>
+      <text x="590" y="420" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Domain services</text>
+      <text x="590" y="436" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">11 FastAPI services</text>
+      <text x="590" y="448" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">catalog · orders · payments…</text>
+
+      <!-- Node: Redis (store) -->
+      <rect x="800" y="180" width="140" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="800" y="180" width="140" height="64" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="808" y="188" width="24" height="12" rx="2" fill="transparent" stroke="rgba(79,93,117,0.50)" stroke-width="0.8"/>
+      <text x="820" y="197" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KV</text>
+      <text x="870" y="216" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Redis</text>
+      <text x="870" y="232" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">session + cache</text>
+
+      <!-- Node: RabbitMQ (store) -->
+      <rect x="800" y="280" width="140" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="800" y="280" width="140" height="64" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="808" y="288" width="26" height="12" rx="2" fill="transparent" stroke="rgba(79,93,117,0.50)" stroke-width="0.8"/>
+      <text x="821" y="297" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MQ</text>
+      <text x="870" y="316" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">RabbitMQ</text>
+      <text x="870" y="332" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">quorum queues</text>
+
+      <!-- Node: PostgreSQL (focal) -->
+      <rect x="800" y="388" width="140" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="800" y="388" width="140" height="64" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+      <rect x="808" y="396" width="24" height="12" rx="2" fill="transparent" stroke="rgba(191,69,32,0.50)" stroke-width="0.8"/>
+      <text x="820" y="405" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+      <text x="925" y="448" fill="rgba(191,69,32,0.10)" font-size="28" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="end">02</text>
+      <text x="870" y="424" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">PostgreSQL</text>
+      <text x="870" y="440" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">schema per service</text>
+
+      <!-- Node: mock-payment-provider (external) -->
+      <rect x="512" y="540" width="156" height="64" rx="6" fill="#f5f5f5"/>
+      <rect x="512" y="540" width="156" height="64" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <rect x="520" y="548" width="28" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.22)" stroke-width="0.8"/>
+      <text x="534" y="557" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PSP</text>
+      <text x="590" y="576" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">mock-payment-provider</text>
+      <text x="590" y="592" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">simulated PSP · outside trust boundary</text>
+
+      <!-- Legend strip -->
+      <line x1="40" y1="624" x2="1120" y2="624" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="40" y="640" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <rect x="40" y="656" width="14" height="10" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+      <text x="60" y="664" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Focal (composition / primary store)</text>
+
+      <rect x="294" y="656" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="314" y="664" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Backend</text>
+
+      <rect x="396" y="656" width="14" height="10" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="416" y="664" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Store</text>
+
+      <rect x="478" y="656" width="14" height="10" rx="2" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text x="498" y="664" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">External / separate trust domain</text>
+
+      <rect x="760" y="656" width="14" height="10" rx="2" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+      <text x="780" y="664" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Browser</text>
+
+      <line x1="860" y1="661" x2="888" y2="661" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="896" y="664" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">HTTP / API</text>
+
+      <line x1="1000" y1="661" x2="1028" y2="661" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <text x="1036" y="664" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Async / return</text>
+    </svg>
+    </div>
+
+    <section class="order-flow" aria-labelledby="order-flow-title">
+      <h2 id="order-flow-title">How one order moves through ScaleForge</h2>
+
+      <div class="flow-step">
+        <h3>
+          <button class="flow-trigger" id="flow-trigger-1" type="button" aria-expanded="true" aria-controls="flow-panel-1" hidden>
+            <span>Build a trusted order from the cart</span>
+            <svg class="morphicon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 12h14" />
+              <path class="morphicon__vertical" d="M12 5v14" />
+            </svg>
+          </button>
+          <span class="flow-fallback-title">Build a trusted order from the cart</span>
+        </h3>
+        <div class="flow-panel" id="flow-panel-1">
+          <div class="flow-panel__inner">
+            <p>Checkout takes a fresh cart snapshot, checks its version, and asks the catalog for current prices. The server—not the browser—builds the order totals.</p>
+            <p>An idempotency key makes a retry safe: the same checkout request resumes or replays its order instead of creating a duplicate.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <h3>
+          <button class="flow-trigger" id="flow-trigger-2" type="button" aria-expanded="false" aria-controls="flow-panel-2" hidden>
+            <span>Reserve stock, then authorize payment</span>
+            <svg class="morphicon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 12h14" />
+              <path class="morphicon__vertical" d="M12 5v14" />
+            </svg>
+          </button>
+          <span class="flow-fallback-title">Reserve stock, then authorize payment</span>
+        </h3>
+        <div class="flow-panel" id="flow-panel-2">
+          <div class="flow-panel__inner">
+            <p>Orders creates a pending order and records the saga before asking inventory to reserve each item. Only after stock is reserved does payments authorize the amount.</p>
+            <p>If stock is unavailable or payment is declined, the order is cancelled and any reservation is released. Authorization places a hold; it does not capture funds yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <h3>
+          <button class="flow-trigger" id="flow-trigger-3" type="button" aria-expanded="false" aria-controls="flow-panel-3" hidden>
+            <span>Commit stock, capture, and confirm</span>
+            <svg class="morphicon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 12h14" />
+              <path class="morphicon__vertical" d="M12 5v14" />
+            </svg>
+          </button>
+          <span class="flow-fallback-title">Commit stock, capture, and confirm</span>
+        </h3>
+        <div class="flow-panel" id="flow-panel-3">
+          <div class="flow-panel__inner">
+            <p>After authorization, an event commits the inventory reservation. Once inventory confirms, payments captures the funds; only a successful capture moves the order to confirmed.</p>
+            <p>Each step is persisted and guarded against duplicate or late events. If a later step fails, the saga compensates where possible, and recovery continues without losing the order’s state.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+    const orderFlow = document.querySelector('.order-flow');
+    const flowTriggers = [...document.querySelectorAll('.flow-trigger')];
+    const flowPanels = [...document.querySelectorAll('.flow-panel')];
+    const fallbackTitles = [...document.querySelectorAll('.flow-fallback-title')];
+
+    orderFlow.dataset.enhanced = 'true';
+    fallbackTitles.forEach((title) => title.hidden = true);
+    flowTriggers.forEach((trigger, index) => {
+      trigger.hidden = false;
+      trigger.setAttribute('aria-expanded', String(index === 0));
+      const panel = document.getElementById(trigger.getAttribute('aria-controls'));
+      panel.dataset.open = String(index === 0);
+      panel.setAttribute('aria-hidden', String(index !== 0));
+      if (index !== 0) panel.inert = true;
+
+      trigger.addEventListener('click', () => {
+        const opening = trigger.getAttribute('aria-expanded') !== 'true';
+        flowTriggers.forEach((item) => item.setAttribute('aria-expanded', 'false'));
+        flowPanels.forEach((item) => {
+          item.dataset.open = 'false';
+          item.setAttribute('aria-hidden', 'true');
+          item.inert = true;
+        });
+
+        if (opening) {
+          trigger.setAttribute('aria-expanded', 'true');
+          panel.dataset.open = 'true';
+          panel.setAttribute('aria-hidden', 'false');
+          panel.inert = false;
+        }
+      });
+    });
+  </script>
+</body>
+</html>

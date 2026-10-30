@@ -66,14 +66,19 @@ api PUT "/permissions/$V/$RABBITMQ_DEFAULT_USER" '{"configure":".*","write":".*"
 api PUT "/exchanges/$V/sf.events" '{"type":"topic","durable":true}'
 api PUT "/exchanges/$V/sf.commands" '{"type":"topic","durable":true}'
 
-# q.authz.identity (E2.8): authz-svc's projections (LLD-08 §2.1).
-queue_with_dlq q.authz.identity
+# q.authz.identity (E2.8): authz-svc's projections (LLD-08 §2.1). Retry
+# tiers (E4.5, rolled out past the one pilot consumer): a policy-table
+# write can hit the same deadlock/serialization class sf_db.retry_on_transient
+# already retries locally, just past that budget.
+queue_with_dlq_and_retries q.authz.identity
 for key in "membership.*.v1" "organization.*.v1" "user.created.v1" "user.disabled.v1" "user.reactivated.v1"; do
   bind sf.events q.authz.identity "$key"
 done
 
-# q.audit.ingest (E2.9): audit-svc consumes audit.recorded.v1.
-queue_with_dlq q.audit.ingest
+# q.audit.ingest (E2.9): audit-svc consumes audit.recorded.v1. Retry tiers
+# (E4.5): the chain-hash insert takes an advisory lock per write, a
+# transient-contention class worth a few redelivery attempts before DLQ.
+queue_with_dlq_and_retries q.audit.ingest
 bind sf.events q.audit.ingest audit.recorded.v1
 
 # q.bff.identity (E2.12): the BFF revokes a disabled user's sessions (LLD-01 §8).
@@ -89,32 +94,45 @@ queue_with_dlq q.bff.sse
 bind sf.events q.bff.sse order.status_changed.v1
 
 # q.orgs.users (E2.8, LLD-08 §2.1): orgs-svc disables a disabled user's
-# memberships in every org.
-queue_with_dlq q.orgs.users
+# memberships in every org. Retry tiers (E4.5): a multi-row membership
+# update is the same deadlock-class write this epic already retries
+# elsewhere.
+queue_with_dlq_and_retries q.orgs.users
 bind sf.events q.orgs.users user.disabled.v1
 
 # q.authz.commands (E2.8, LLD-01 §9): authz-svc self-consumes the MFA group
 # sync command to call Keycloak's admin API via its own sf-authz-admin client.
-queue_with_dlq q.authz.commands
+# Retry tiers (E4.5): a Keycloak admin-API call is exactly the kind of
+# transient httpx failure sf_messaging.retry's is_transient already
+# recognizes generically, not just DB deadlocks.
+queue_with_dlq_and_retries q.authz.commands
 bind sf.commands q.authz.commands identity.mfa_group_sync_requested.v1
 
 # q.users.commands (E2.8, LLD-01 §11.2-§11.3): users-svc self-consumes the
 # retry of a failed synchronous Keycloak sf_uid sync, and the Keycloak
-# enable/disable that follows a user's status.
-queue_with_dlq q.users.commands
+# enable/disable that follows a user's status. Retry tiers (E4.5): this
+# queue's whole job is retrying a Keycloak call that already failed once
+# synchronously -- a second transient httpx failure here is the expected
+# case, not the exception.
+queue_with_dlq_and_retries q.users.commands
 bind sf.commands q.users.commands user.idp_sync_requested.v1
 bind sf.commands q.users.commands user.idp_status_sync_requested.v1
 
 # q.catalog.orgs (E3.1, LLD-05 §2): catalog-svc's store_pricing_settings
 # projection off organization.* events (currency, shipping, tax, status) --
 # how the pricing quote learns an org's settings without calling orgs-svc
-# synchronously.
-queue_with_dlq q.catalog.orgs
+# synchronously. Retry tiers (E4.5): an upsert here under concurrent
+# organization.* delivery is the same transient-write class as the pilot
+# consumer.
+queue_with_dlq_and_retries q.catalog.orgs
 bind sf.events q.catalog.orgs organization.*.v1
 
 # q.search.catalog (E3.2, LLD-05 §7.2): search-svc indexes catalog-svc's
-# product lifecycle (version-guarded upsert/tombstone).
-queue_with_dlq q.search.catalog
+# product lifecycle (version-guarded upsert/tombstone). Retry tiers
+# (E4.5): a version-guarded upsert competing with its own search index's
+# other writers under load is the same transient-write class as the
+# pilot consumer.
+queue_with_dlq_and_retries q.search.catalog
 bind sf.events q.search.catalog product.updated.v1
 bind sf.events q.search.catalog product.deleted.v1
 
@@ -130,16 +148,21 @@ bind sf.events q.inventory.catalog product.updated.v1
 # q.inventory.commands (E3.4, LLD-07 §4.2-§4.4): the async alternative to
 # the direct internal commit/release/restock calls. orders-svc (E3.5) uses
 # the direct calls today; this queue is what it would use instead once it
-# prefers a command over a synchronous one.
-queue_with_dlq q.inventory.commands
+# prefers a command over a synchronous one. Retry tiers (E4.5): commit/
+# release/restock are the same stock-row writers q.inventory.catalog's
+# own pilot already covers for the projection path; this is that same
+# class on the command path.
+queue_with_dlq_and_retries q.inventory.commands
 bind sf.commands q.inventory.commands inventory.commit_requested.v1
 bind sf.commands q.inventory.commands inventory.release_requested.v1
 bind sf.commands q.inventory.commands inventory.restock_requested.v1
 
 # q.orders.inventory (E3.5, LLD-06 §5.1 steps 14-15): the checkout saga's
 # async continuation past COMMITTING -- real today, inventory-svc exists
-# and publishes both of these.
-queue_with_dlq q.orders.inventory
+# and publishes both of these. Retry tiers (E4.5): a saga state transition
+# landing on the same order row other writers are touching is the same
+# transient-contention class, on the path that actually settles an order.
+queue_with_dlq_and_retries q.orders.inventory
 bind sf.events q.orders.inventory inventory.committed.v1
 bind sf.events q.orders.inventory inventory.reservation_expired.v1
 

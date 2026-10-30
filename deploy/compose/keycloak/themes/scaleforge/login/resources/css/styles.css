@@ -1,0 +1,417 @@
+/* ScaleForge login theme -- warm ivory / emerald / vermilion, the same
+ * palette as apps/web's own SignInPrompt (that page's own comment has the
+ * hex values). Targets keycloak.v2's real PatternFly 5 classes, read off
+ * an actual rendered login page rather than guessed: .pf-v5-c-login,
+ * .pf-v5-c-login__main, .pf-v5-c-brand, .pf-v5-c-button.pf-m-primary,
+ * .pf-v5-c-form-control, .pf-v5-c-title.
+ *
+ * theme.properties' own `styles` property *replaces* keycloak.v2's list
+ * rather than extending it (confirmed directly: with only this file
+ * named, the rendered page loaded no other theme-level stylesheet at
+ * all), so the structural rules below -- the login card's own grid,
+ * the password-field tooltip, the recovery-codes layout -- are
+ * keycloak.v2's own real content, copied in so nothing breaks, not
+ * reinvented. Only the background-image and logo-image rules are
+ * dropped on purpose: this theme replaces both.
+ */
+
+.pf-v5-c-login__container {
+  grid-template-columns: 34rem;
+  grid-template-areas: 'header' 'main';
+}
+
+/* keycloak.v2's own 70/30 split (main-header.css) is for a header image
+ * sitting beside the title -- this theme drops the header image on
+ * purpose (see the file banner above), so with nothing in the other 30%
+ * column that rule just squeezes "Sign in to your account" into a column
+ * two-thirds as wide as the card and forces an unnecessary wrap. */
+div.pf-v5-c-login__main-header {
+  grid-template-columns: 1fr;
+}
+
+.kc-login-tooltip {
+  position: relative;
+  display: inline-block;
+}
+
+.kc-login-tooltip .kc-tooltip-text {
+  top: -3px;
+  left: 160%;
+  background-color: black;
+  visibility: hidden;
+  color: #fff;
+  min-width: 130px;
+  text-align: center;
+  border-radius: 2px;
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+  padding: 5px;
+  position: absolute;
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+
+.kc-login-tooltip:hover .kc-tooltip-text {
+  visibility: visible;
+  opacity: 0.7;
+}
+
+.kc-login-tooltip .kc-tooltip-text::after {
+  content: ' ';
+  position: absolute;
+  top: 15px;
+  right: 100%;
+  margin-top: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color: transparent black transparent transparent;
+}
+
+#kc-recovery-codes-list {
+  columns: 2;
+}
+
+#certificate_subjectDN {
+  overflow-wrap: break-word;
+}
+
+hr {
+  margin-top: var(--pf-v5-global--spacer--sm);
+  margin-bottom: var(--pf-v5-global--spacer--md);
+}
+
+:root {
+  --sf-ivory: #fbf4e6;
+  --sf-ivory-deep: #f3e9d4;
+  --sf-ink: #2a2420;
+  --sf-ink-muted: #6b6256;
+  --sf-emerald: #1f6d4c;
+  --sf-emerald-deep: #164e37;
+  --sf-vermilion: #d8471f;
+}
+
+body#keycloak-bg,
+.login-pf body {
+  background: var(--sf-ivory) !important; /* keycloak.v2 sets a bg image here */
+  background-size: auto !important;
+}
+
+.pf-v5-c-login {
+  background: var(--sf-ivory);
+}
+
+.pf-v5-c-login__header #kc-header-wrapper {
+  color: var(--sf-emerald-deep);
+  text-transform: none;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+  font-size: 1.75rem;
+}
+
+.pf-v5-c-login__main {
+  background: #fff;
+  border: 1px solid var(--sf-ivory-deep);
+  border-radius: 10px;
+  /* One accent stripe, not a shadow: the card sits on a flat step in
+   * tone (index.css's own "no shadows on things at rest" rule applies
+   * here too) with a vermilion top edge instead of a drop shadow. */
+  border-top: 4px solid var(--sf-vermilion);
+  box-shadow: none;
+}
+
+.pf-v5-c-login__main-header .pf-v5-c-title {
+  color: var(--sf-ink);
+}
+
+.pf-v5-c-form__label-text {
+  color: var(--sf-ink-muted);
+}
+
+.pf-v5-c-form-control,
+.pf-v5-c-form-control input {
+  border-color: var(--sf-ivory-deep);
+}
+
+/* Border colour change only, no shadow halo -- the browser's own native
+ * focus outline already carries the a11y signal; a box-shadow on top of
+ * it is decoration this theme's own "nothing at rest, or receiving
+ * focus, gets a shadow" rule doesn't make an exception for. */
+.pf-v5-c-form-control:focus-within,
+.pf-v5-c-form-control.pf-m-focus {
+  border-color: var(--sf-emerald);
+}
+
+/* Primary button (Sign In): PatternFly's own .pf-m-primary rule sets
+ * background via its own global var at higher specificity than a bare
+ * class selector in some builds, so this one keeps !important. */
+.pf-v5-c-button.pf-m-primary {
+  background-color: var(--sf-emerald) !important;
+  border-color: var(--sf-emerald) !important;
+  color: var(--sf-ivory) !important;
+}
+
+.pf-v5-c-button.pf-m-primary:hover,
+.pf-v5-c-button.pf-m-primary:focus {
+  background-color: var(--sf-emerald-deep) !important;
+  border-color: var(--sf-emerald-deep) !important;
+}
+
+a,
+#kc-registration a,
+#kc-options a {
+  color: var(--sf-emerald);
+}
+
+a:hover {
+  color: var(--sf-vermilion);
+}
+
+/* Keycloak's own alert components (bad password, locked account, etc.)
+ * keep PatternFly's default red -- re-coloring an error red as vermilion
+ * would make a real error look like a decoration, not a warning. */
+
+/* --- Modern pass (every login-flow page: register, reset/update
+ * password, OTP, WebAuthn, email verification, error) -- all render
+ * through this same keycloak.v2 template, so one pass here reaches all
+ * of them without touching a single .ftl. */
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+.pf-v5-c-login__container {
+  padding: 0 1rem;
+}
+
+.pf-v5-c-login__header {
+  padding-bottom: 1.5rem;
+}
+
+.pf-v5-c-login__main {
+  padding: 2.5rem 2.25rem;
+  border-radius: 14px;
+}
+
+.pf-v5-c-login__main-header {
+  margin-bottom: 1.75rem;
+}
+
+.pf-v5-c-login__main-header .pf-v5-c-title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.pf-v5-c-login__main-body #kc-info,
+.pf-v5-c-login__main-body .pf-v5-c-login__main-footer-band {
+  color: var(--sf-ink-muted);
+  font-size: 0.875rem;
+}
+
+/* Inputs: larger, rounder, flat -- the laws' own "two or three sizes,
+ * generous space" applied to a form instead of a hero. */
+.pf-v5-c-form__group {
+  margin-bottom: 1.25rem;
+}
+
+/* login.ftl always emits the "remember me" group's wrapping div even when
+ * that feature is off in this realm (it is) -- PatternFly's own form
+ * group sizing then holds its usual min-height with nothing inside it,
+ * which read as a large, unexplained gap between "Forgot Password?" and
+ * the Sign In button. An empty group carries no content worth spacing
+ * for. */
+.pf-v5-c-form__group:empty {
+  display: none;
+}
+
+.pf-v5-c-form__label-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.pf-v5-c-form-control {
+  border-radius: 8px;
+  min-height: 2.75rem;
+}
+
+.pf-v5-c-form-control input,
+.pf-v5-c-form-control > input {
+  font-size: 1rem;
+  padding: 0.625rem 0.875rem;
+}
+
+/* The password-visibility toggle sits in an input-group next to the
+ * password field -- PatternFly's unstyled default control button reads
+ * as a separate, unrelated square (its own border, its own corners).
+ * Match it to the field it belongs to instead. */
+.pf-v5-c-input-group .pf-v5-c-form-control {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.pf-v5-c-input-group .pf-v5-c-button.pf-m-control {
+  min-height: 2.75rem;
+  border: 1px solid var(--sf-ivory-deep);
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  background: #fff;
+  color: var(--sf-ink-muted);
+}
+
+.pf-v5-c-input-group .pf-v5-c-button.pf-m-control:hover {
+  color: var(--sf-ink);
+}
+
+/* Remember-me / forgot-password row: a plain flex row, not PatternFly's
+ * own stacked default -- the two belong on one line at this card width. */
+.pf-v5-c-form__group.login-pf-settings {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+#kc-form-options .pf-v5-c-check__label,
+#kc-form-options .checkbox label {
+  color: var(--sf-ink-muted);
+  font-size: 0.875rem;
+}
+
+/* Buttons: full-width, generous height, square-ish corners (one radius,
+ * decided once, matching apps/web's own tightened-radius precise-tool
+ * feel rather than PatternFly's softer default). */
+.pf-v5-c-button {
+  border-radius: 8px;
+  min-height: 2.75rem;
+  font-weight: 500;
+  font-size: 1rem;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+#kc-form-buttons {
+  margin-top: 1.75rem;
+}
+
+/* Alerts (bad password, account disabled, ...): flat, rounded, no harsh
+ * PatternFly border -- a warning, not a bureaucratic notice box. */
+.pf-v5-c-alert {
+  border-radius: 8px;
+  border: none;
+  padding: 0.875rem 1rem;
+}
+
+/* Space, not a line, separates the register prompt from the form --
+ * the house rule this theme otherwise follows throughout apps/web. */
+.pf-v5-c-login__main-footer-band {
+  margin-top: 2rem;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* --- Dark mode ------------------------------------------------------
+ * keycloak.v2's own base theme already watches prefers-color-scheme and
+ * toggles a `pf-v5-theme-dark` class on <html> for it (see the inline
+ * script in the page's own <head>) -- every rule above this point is
+ * hard-coded to the light palette, though, so a visitor in dark mode got
+ * a half-themed page: light card and headings (our rules), but a dark
+ * username/password field and dark eye-toggle button (PatternFly's own
+ * unthemed dark tokens showing through underneath). Scope a full dark
+ * variant of the same palette to that same class instead of only
+ * patching the two fields that happened to show it. */
+html.pf-v5-theme-dark {
+  --sf-dark-bg: #1c1712;
+  --sf-dark-surface: #241e18;
+  --sf-dark-border: #3a3127;
+  --sf-dark-text: #f3ead9;
+  --sf-dark-text-muted: #ad9f8a;
+  --sf-dark-emerald: #39a374;
+  --sf-dark-emerald-deep: #2a8560;
+  --sf-dark-vermilion: #e2652f;
+}
+
+html.pf-v5-theme-dark body#keycloak-bg,
+html.pf-v5-theme-dark.login-pf body {
+  background: var(--sf-dark-bg) !important;
+}
+
+html.pf-v5-theme-dark .pf-v5-c-login {
+  background: var(--sf-dark-bg);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-login__header #kc-header-wrapper {
+  color: var(--sf-dark-text);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-login__main {
+  background: var(--sf-dark-surface);
+  border-color: var(--sf-dark-border);
+  border-top-color: var(--sf-dark-vermilion);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-login__main-header .pf-v5-c-title {
+  color: var(--sf-dark-text);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-form__label-text {
+  color: var(--sf-dark-text-muted);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-form-control,
+html.pf-v5-theme-dark .pf-v5-c-form-control input {
+  background: var(--sf-dark-bg);
+  border-color: var(--sf-dark-border);
+  color: var(--sf-dark-text);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-form-control:focus-within,
+html.pf-v5-theme-dark .pf-v5-c-form-control.pf-m-focus {
+  border-color: var(--sf-dark-emerald);
+  box-shadow: 0 0 0 1px var(--sf-dark-emerald);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-input-group .pf-v5-c-button.pf-m-control {
+  background: var(--sf-dark-bg);
+  border-color: var(--sf-dark-border);
+  color: var(--sf-dark-text-muted);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-input-group .pf-v5-c-button.pf-m-control:hover {
+  color: var(--sf-dark-text);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-button.pf-m-primary {
+  background-color: var(--sf-dark-emerald) !important;
+  border-color: var(--sf-dark-emerald) !important;
+  color: var(--sf-dark-bg) !important;
+}
+
+html.pf-v5-theme-dark .pf-v5-c-button.pf-m-primary:hover,
+html.pf-v5-theme-dark .pf-v5-c-button.pf-m-primary:focus {
+  background-color: var(--sf-dark-emerald-deep) !important;
+  border-color: var(--sf-dark-emerald-deep) !important;
+}
+
+html.pf-v5-theme-dark a,
+html.pf-v5-theme-dark #kc-registration a,
+html.pf-v5-theme-dark #kc-options a {
+  color: var(--sf-dark-emerald);
+}
+
+html.pf-v5-theme-dark a:hover {
+  color: var(--sf-dark-vermilion);
+}
+
+html.pf-v5-theme-dark .pf-v5-c-login__main-body #kc-info,
+html.pf-v5-theme-dark .pf-v5-c-login__main-body .pf-v5-c-login__main-footer-band {
+  color: var(--sf-dark-text-muted);
+}
+
+html.pf-v5-theme-dark #kc-form-options .pf-v5-c-check__label,
+html.pf-v5-theme-dark #kc-form-options .checkbox label {
+  color: var(--sf-dark-text-muted);
+}
+
+/* Alerts keep PatternFly's own red in both themes (see the light-mode
+ * note above) -- it already carries enough contrast on the dark surface
+ * unchanged. */
